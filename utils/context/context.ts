@@ -8,6 +8,12 @@ import {
   CommunityPost,
 } from "../types/types";
 import { Proof } from "@cashu/cashu-ts";
+import { TaxonomyRegistry } from "@/utils/taxonomy/types";
+import {
+  ActiveTaxonomySourceSettings,
+  TaxonomySourceSettings,
+} from "@/utils/taxonomy/source-settings";
+import { DEFAULT_SITE_LANGUAGE, SiteLanguageCode } from "@/utils/i18n-config";
 
 export interface ProfileContextInterface {
   profileData: Map<string, any>;
@@ -175,6 +181,30 @@ export const CashuWalletContext = createContext({
   isLoading: true,
 } as CashuWalletContextInterface);
 
+export interface TaxonomyContextInterface {
+  registry: TaxonomyRegistry | null;
+  isLoading: boolean;
+  error?: string;
+  reloadRegistry: (refresh?: boolean) => Promise<void>;
+  sourceSettings: ActiveTaxonomySourceSettings;
+  saveSourceSettings: (
+    settings: TaxonomySourceSettings | null
+  ) => Promise<void>;
+}
+
+export const TaxonomyContext = createContext({
+  registry: null,
+  isLoading: true,
+  error: undefined,
+  reloadRegistry: async () => {},
+  sourceSettings: {
+    trustedPubkeys: [],
+    relayUrls: [],
+    isOverride: false,
+  },
+  saveSourceSettings: async () => {},
+} as TaxonomyContextInterface);
+
 export interface CommunityContextInterface {
   communities: Map<string, Community>; // key is event id
   posts: Map<string, CommunityPost[]>; // key is community address (a-tag)
@@ -188,3 +218,13 @@ export const CommunityContext = createContext({
   isLoading: true,
   addCommunity: (_community: Community) => {},
 } as CommunityContextInterface);
+
+export interface SiteLanguageContextInterface {
+  siteLanguage: SiteLanguageCode;
+  setSiteLanguage: (language: SiteLanguageCode) => void;
+}
+
+export const SiteLanguageContext = createContext({
+  siteLanguage: DEFAULT_SITE_LANGUAGE,
+  setSiteLanguage: (_language: SiteLanguageCode) => {},
+} as SiteLanguageContextInterface);

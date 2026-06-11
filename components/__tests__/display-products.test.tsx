@@ -367,7 +367,9 @@ describe("DisplayProducts search filtering", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("No products found...")).toBeInTheDocument();
+      expect(
+        screen.getByText("No listings found in this scope")
+      ).toBeInTheDocument();
     });
     expect(nostr.fetch).not.toHaveBeenCalled();
   });
@@ -391,7 +393,9 @@ describe("DisplayProducts search filtering", () => {
     renderDisplayProducts({ nostr });
 
     await waitFor(() => {
-      expect(screen.getByText("No products found...")).toBeInTheDocument();
+      expect(
+        screen.getByText("No listings found in this scope")
+      ).toBeInTheDocument();
       expect(screen.queryByText("Coffee beans")).not.toBeInTheDocument();
     });
   });

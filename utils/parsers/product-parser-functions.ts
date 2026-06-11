@@ -2,6 +2,8 @@ import { ShippingOptionsType } from "@/utils/STATIC-VARIABLES";
 import { calculateTotalCost } from "@/components/utility-components/display-monetary-info";
 import { parseShippingTag } from "@/utils/parsers/product-tag-helpers";
 import { NostrEvent } from "@/utils/types/types";
+import { ProductTaxonomy } from "@/utils/taxonomy/types";
+import { decodeTaxonomyAssertions } from "@/utils/taxonomy/assertions";
 
 export type ProductData = {
   id: string;
@@ -43,6 +45,7 @@ export type ProductData = {
   pickupLocations?: string[];
   expiration?: number;
   rawEvent?: NostrEvent;
+  taxonomy?: ProductTaxonomy;
 };
 
 export const parseTags = (productEvent: NostrEvent) => {
@@ -190,6 +193,16 @@ export const parseTags = (productEvent: NostrEvent) => {
         return;
     }
   });
+  const decodedTaxonomy = decodeTaxonomyAssertions(tags);
+  const hasTaxonomy =
+    Boolean(decodedTaxonomy.primaryThingRef) ||
+    decodedTaxonomy.overlayValRefs.length > 0 ||
+    Boolean(decodedTaxonomy.requiredRefs?.length) ||
+    decodedTaxonomy.refAssertions.length > 0 ||
+    decodedTaxonomy.literalAssertions.length > 0;
+  if (hasTaxonomy) {
+    parsedData.taxonomy = decodedTaxonomy;
+  }
   parsedData.totalCost = calculateTotalCost(parsedData);
   return parsedData;
 };

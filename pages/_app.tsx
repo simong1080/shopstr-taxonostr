@@ -1,6 +1,13 @@
 import type { AppProps } from "next/app";
 import "../styles/globals.css";
-import { useState, useEffect, useCallback, useContext, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+} from "react";
 import { useRouter } from "next/router";
 import {
   ProfileMapContext,
@@ -26,6 +33,9 @@ import {
   CashuWalletContextInterface,
   CommunityContext,
   CommunityContextInterface,
+  TaxonomyContext,
+  TaxonomyContextInterface,
+  SiteLanguageContext,
 } from "../utils/context/context";
 import {
   getLocalStorageData,
@@ -69,6 +79,21 @@ import {
 import { retryFailedRelayPublishes } from "@/utils/nostr/retry-service";
 import { MintRecoveryBoot } from "@/components/utility-components/mint-recovery-boot";
 import { NostrManager } from "@/utils/nostr/nostr-manager";
+import { TaxonomyRegistry } from "@/utils/taxonomy/types";
+import {
+  ActiveTaxonomySourceSettings,
+  normalizeTaxonomySourceSettings,
+  readLocalTaxonomySourceSettings,
+  TaxonomySourceSettings,
+  taxonomyApiPath,
+  writeLocalTaxonomySourceSettings,
+} from "@/utils/taxonomy/source-settings";
+import {
+  DEFAULT_SITE_LANGUAGE,
+  normalizeSiteLanguage,
+  RTL_SITE_LANGUAGES,
+  SiteLanguageCode,
+} from "@/utils/i18n-config";
 
 const mergeReportEvents = (
   existingReports: NostrEvent[],
@@ -376,9 +401,123 @@ function Shopstr({ props }: { props: AppProps }) {
       cashuProofs: [],
       isLoading: true,
     });
+  const [taxonomyContext, setTaxonomyContext] =
+    useState<TaxonomyContextInterface>({
+      registry: null,
+      isLoading: true,
+      error: undefined,
+      reloadRegistry: async () => {},
+      sourceSettings: {
+        trustedPubkeys: [],
+        relayUrls: [],
+        isOverride: false,
+      },
+      saveSourceSettings: async () => {},
+    });
+  const [taxonomySourceOverride, setTaxonomySourceOverride] =
+    useState<TaxonomySourceSettings | null>(null);
+  const [taxonomySourceSettingsLoaded, setTaxonomySourceSettingsLoaded] =
+    useState(false);
+  const [siteLanguage, setSiteLanguage] = useState<SiteLanguageCode>(
+    DEFAULT_SITE_LANGUAGE
+  );
   const hydratedMarketplaceProductIdsRef = useRef<Set<string>>(new Set());
   const pendingMarketplaceProductIdsRef = useRef<Set<string>>(new Set());
   const didCompleteInitialMarketplaceHydrationRef = useRef(false);
+
+  const activeTaxonomySourceSettings: ActiveTaxonomySourceSettings = useMemo(
+    () => ({
+      ...normalizeTaxonomySourceSettings(taxonomySourceOverride),
+      isOverride: Boolean(taxonomySourceOverride),
+    }),
+    [taxonomySourceOverride]
+  );
+
+  const loadTaxonomyRegistry = useCallback(
+    async (settings: TaxonomySourceSettings | null, refresh = false) => {
+      const sourceSettings = settings
+        ? normalizeTaxonomySourceSettings(settings)
+        : null;
+      const activeSourceSettings: ActiveTaxonomySourceSettings = {
+        ...(sourceSettings || { trustedPubkeys: [], relayUrls: [] }),
+        isOverride: Boolean(sourceSettings),
+      };
+
+      setTaxonomyContext((current) => ({
+        ...current,
+        isLoading: true,
+        error: undefined,
+        sourceSettings: activeSourceSettings,
+      }));
+
+      try {
+        const response = await fetch(
+          taxonomyApiPath(
+            "/api/taxonomy/registry",
+            sourceSettings,
+            refresh ? { refresh: "1" } : {}
+          )
+        );
+        if (!response.ok) {
+          throw new Error(
+            `Taxonomy registry request failed with ${response.status}`
+          );
+        }
+        const registry = (await response.json()) as TaxonomyRegistry;
+        setTaxonomyContext((current) => ({
+          ...current,
+          registry,
+          isLoading: false,
+          error: undefined,
+          sourceSettings: activeSourceSettings,
+        }));
+      } catch (error) {
+        setTaxonomyContext((current) => ({
+          ...current,
+          registry: null,
+          isLoading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to load taxonomy registry",
+          sourceSettings: activeSourceSettings,
+        }));
+      }
+    },
+    []
+  );
+
+  const reloadTaxonomyRegistry = useCallback(
+    async (refresh = false) => {
+      await loadTaxonomyRegistry(taxonomySourceOverride, refresh);
+    },
+    [loadTaxonomyRegistry, taxonomySourceOverride]
+  );
+
+  const saveTaxonomySourceSettings = useCallback(
+    async (settings: TaxonomySourceSettings | null) => {
+      const normalizedSettings = settings
+        ? normalizeTaxonomySourceSettings(settings)
+        : null;
+      writeLocalTaxonomySourceSettings(normalizedSettings);
+      setTaxonomySourceOverride(normalizedSettings);
+      await loadTaxonomyRegistry(normalizedSettings, true);
+    },
+    [loadTaxonomyRegistry]
+  );
+
+  useEffect(() => {
+    setTaxonomyContext((current) => ({
+      ...current,
+      reloadRegistry: reloadTaxonomyRegistry,
+      saveSourceSettings: saveTaxonomySourceSettings,
+      sourceSettings: activeTaxonomySourceSettings,
+    }));
+  }, [
+    activeTaxonomySourceSettings,
+    reloadTaxonomyRegistry,
+    saveTaxonomySourceSettings,
+  ]);
 
   const mergeReportsContext = (nextReports: NostrEvent[]) => {
     if (nextReports.length === 0) return;
@@ -1019,6 +1158,35 @@ function Shopstr({ props }: { props: AppProps }) {
   ]);
 
   useEffect(() => {
+    setTaxonomySourceOverride(readLocalTaxonomySourceSettings());
+    setTaxonomySourceSettingsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!taxonomySourceSettingsLoaded) return;
+    reloadTaxonomyRegistry().catch((error) => {
+      console.error("Failed to initialize taxonomy registry:", error);
+    });
+  }, [reloadTaxonomyRegistry, taxonomySourceSettingsLoaded]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedLanguage = normalizeSiteLanguage(
+      window.localStorage.getItem("siteLanguage")
+    );
+    setSiteLanguage(storedLanguage);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("siteLanguage", siteLanguage);
+    document.documentElement.lang = siteLanguage;
+    document.documentElement.dir = RTL_SITE_LANGUAGES.has(siteLanguage)
+      ? "rtl"
+      : "ltr";
+  }, [siteLanguage]);
+
+  useEffect(() => {
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
         navigator.serviceWorker
@@ -1043,63 +1211,68 @@ function Shopstr({ props }: { props: AppProps }) {
       />
       <StructuredData />
       <PageLoadingBar />
-      <CommunityContext.Provider value={communityContext}>
-        <RelaysContext.Provider value={relaysContext}>
-          <BlossomContext.Provider value={blossomContext}>
-            <CashuWalletContext.Provider value={cashuWalletContext}>
-              <FollowsContext.Provider value={followsContext}>
-                <ProductContext.Provider value={productContext}>
-                  <ReviewsContext.Provider value={reviewsContext}>
-                    <ReportsContext.Provider value={reportsContext}>
-                      <ProfileMapContext.Provider value={profileContext}>
-                        <ShopMapContext.Provider value={shopContext}>
-                          <ChatsContext.Provider
-                            value={
-                              {
-                                chatsMap: chatsMap,
-                                isLoading: isChatLoading,
-                                addNewlyCreatedMessageEvent:
-                                  addNewlyCreatedMessageEvent,
-                                markAllMessagesAsRead: markAllMessagesAsRead,
-                                newOrderIds: newOrderIds,
-                              } as ChatsContextInterface
-                            }
-                          >
-                            {![
-                              "/",
-                              "/about",
-                              "/contact",
-                              "/faq",
-                              "/terms",
-                              "/privacy",
-                            ].includes(router.pathname) && (
-                              <TopNav
-                                setFocusedPubkey={setFocusedPubkey}
-                                setSelectedSection={setSelectedSection}
-                              />
-                            )}
-                            <div className="flex">
-                              <main className="flex-1">
-                                <Component
-                                  {...pageProps}
-                                  focusedPubkey={focusedPubkey}
-                                  setFocusedPubkey={setFocusedPubkey}
-                                  selectedSection={selectedSection}
-                                  setSelectedSection={setSelectedSection}
-                                />
-                              </main>
-                            </div>
-                          </ChatsContext.Provider>
-                        </ShopMapContext.Provider>
-                      </ProfileMapContext.Provider>
-                    </ReportsContext.Provider>
-                  </ReviewsContext.Provider>
-                </ProductContext.Provider>
-              </FollowsContext.Provider>
-            </CashuWalletContext.Provider>
-          </BlossomContext.Provider>
-        </RelaysContext.Provider>
-      </CommunityContext.Provider>
+      <SiteLanguageContext.Provider value={{ siteLanguage, setSiteLanguage }}>
+        <CommunityContext.Provider value={communityContext}>
+          <RelaysContext.Provider value={relaysContext}>
+            <BlossomContext.Provider value={blossomContext}>
+              <CashuWalletContext.Provider value={cashuWalletContext}>
+                <FollowsContext.Provider value={followsContext}>
+                  <ProductContext.Provider value={productContext}>
+                    <TaxonomyContext.Provider value={taxonomyContext}>
+                      <ReviewsContext.Provider value={reviewsContext}>
+                        <ReportsContext.Provider value={reportsContext}>
+                          <ProfileMapContext.Provider value={profileContext}>
+                            <ShopMapContext.Provider value={shopContext}>
+                              <ChatsContext.Provider
+                                value={
+                                  {
+                                    chatsMap: chatsMap,
+                                    isLoading: isChatLoading,
+                                    addNewlyCreatedMessageEvent:
+                                      addNewlyCreatedMessageEvent,
+                                    markAllMessagesAsRead:
+                                      markAllMessagesAsRead,
+                                    newOrderIds: newOrderIds,
+                                  } as ChatsContextInterface
+                                }
+                              >
+                                {![
+                                  "/",
+                                  "/about",
+                                  "/contact",
+                                  "/faq",
+                                  "/terms",
+                                  "/privacy",
+                                ].includes(router.pathname) && (
+                                  <TopNav
+                                    setFocusedPubkey={setFocusedPubkey}
+                                    setSelectedSection={setSelectedSection}
+                                  />
+                                )}
+                                <div className="flex">
+                                  <main className="flex-1">
+                                    <Component
+                                      {...pageProps}
+                                      focusedPubkey={focusedPubkey}
+                                      setFocusedPubkey={setFocusedPubkey}
+                                      selectedSection={selectedSection}
+                                      setSelectedSection={setSelectedSection}
+                                    />
+                                  </main>
+                                </div>
+                              </ChatsContext.Provider>
+                            </ShopMapContext.Provider>
+                          </ProfileMapContext.Provider>
+                        </ReportsContext.Provider>
+                      </ReviewsContext.Provider>
+                    </TaxonomyContext.Provider>
+                  </ProductContext.Provider>
+                </FollowsContext.Provider>
+              </CashuWalletContext.Provider>
+            </BlossomContext.Provider>
+          </RelaysContext.Provider>
+        </CommunityContext.Provider>
+      </SiteLanguageContext.Provider>
     </>
   );
 }

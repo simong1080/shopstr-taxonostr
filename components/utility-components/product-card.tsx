@@ -24,6 +24,7 @@ import { useRouter } from "next/router";
 import { SignerContext } from "@/components/utility-components/nostr-context-provider";
 import SignInModal from "../sign-in/SignInModal";
 import useReportEventFlow from "./use-report-event-flow";
+import TaxonomySummary from "./taxonomy-summary";
 
 export default function ProductCard({
   productData,
@@ -253,6 +254,11 @@ export default function ProductCard({
                 )}
               </div>
             </div>
+            <TaxonomySummary
+              productData={productData}
+              compact
+              className="mb-2"
+            />
 
             {/* Status badges */}
             {(isExpired ||

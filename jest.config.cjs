@@ -30,6 +30,7 @@ const customJestConfig = {
     // Handle module aliases
     "^@/(.*)$": "<rootDir>/$1",
   },
+  modulePathIgnorePatterns: ["<rootDir>/.next/"],
 };
 
 module.exports = async () => {

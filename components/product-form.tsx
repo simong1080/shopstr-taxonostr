@@ -39,7 +39,11 @@ import {
 } from "@/utils/nostr/nostr-helper-functions";
 import LocationDropdown from "./utility-components/dropdowns/location-dropdown";
 import ConfirmActionDropdown from "./utility-components/dropdowns/confirm-action-dropdown";
-import { ProductContext, ProfileMapContext } from "../utils/context/context";
+import {
+  ProductContext,
+  ProfileMapContext,
+  TaxonomyContext,
+} from "../utils/context/context";
 import { ProductData } from "@/utils/parsers/product-parser-functions";
 import {
   formatCurrentDateTimeLocalValue,
@@ -54,6 +58,10 @@ import {
 } from "@/components/utility-components/nostr-context-provider";
 import { ProductFormValues } from "../utils/types/types";
 import { useTheme } from "next-themes";
+import {
+  encodeTaxonomyAddressTags,
+  encodeTaxonomyAssertions,
+} from "@/utils/taxonomy/assertions";
 
 interface ProductFormProps {
   handleModalToggle: () => void;
@@ -84,6 +92,7 @@ export default function ProductForm({
   const [isFlashSale, setIsFlashSale] = useState(false);
   const productEventContext = useContext(ProductContext);
   const profileContext = useContext(ProfileMapContext);
+  const { registry } = useContext(TaxonomyContext);
   const {
     signer,
     isLoggedIn,
@@ -204,6 +213,15 @@ export default function ProductForm({
       tags.push(["t", category]);
     });
     tags.push(["t", "shopstr"]);
+
+    if (oldValues?.taxonomy) {
+      try {
+        tags.push(...encodeTaxonomyAssertions(oldValues.taxonomy));
+        tags.push(...encodeTaxonomyAddressTags(oldValues.taxonomy, registry));
+      } catch (error) {
+        console.warn("Skipping invalid Taxonostr taxonomy assertions:", error);
+      }
+    }
 
     if (data["Quantity"]) {
       tags.push(["quantity", data["Quantity"].toString()]);
