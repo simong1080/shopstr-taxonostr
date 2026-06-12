@@ -1,4 +1,11 @@
-import { useEffect, useState, useContext } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useContext,
+  useMemo,
+  useRef,
+} from "react";
 import CryptoJS from "crypto-js";
 import { useRouter } from "next/router";
 import { useForm, Controller } from "react-hook-form";
@@ -42,6 +49,7 @@ import ConfirmActionDropdown from "./utility-components/dropdowns/confirm-action
 import {
   ProductContext,
   ProfileMapContext,
+  SiteLanguageContext,
   TaxonomyContext,
 } from "../utils/context/context";
 import { ProductData } from "@/utils/parsers/product-parser-functions";
@@ -62,6 +70,67 @@ import {
   encodeTaxonomyAddressTags,
   encodeTaxonomyAssertions,
 } from "@/utils/taxonomy/assertions";
+import { getTaxonomyNodeLabel, normalizeRef } from "@/utils/taxonomy/registry";
+import {
+  getThingSearchSuggestions,
+  TaxonomySearchSuggestion,
+} from "@/utils/taxonomy/search";
+import {
+  buildActiveListingState,
+  buildListingTaxonomyRefAssertions,
+  createEmptyListingTaxonomyState,
+  deriveLegacyCategoryTags,
+  type PropRenderNode,
+} from "@/utils/taxonomy/listing-state";
+import {
+  clearListingTaxonomySelections,
+  clearPropForListing,
+  hydrateListingTaxonomyStateFromProduct,
+  removeOverlayForListing,
+  selectCompatibleSegmentForListing,
+  selectThingForListing,
+  setLiteralForListing,
+  setPropValueForListing,
+  toggleContextForListing,
+} from "@/utils/taxonomy/listing-actions";
+import {
+  ProductTaxonomy,
+  ProductTaxonomyLiteralAssertion,
+  ProductTaxonomyRefAssertion,
+  TaxonomyState,
+} from "@/utils/taxonomy/types";
+import { translateUi } from "@/utils/i18n-translations";
+import { getTaxonomyDisplayLabel } from "@/utils/taxonomy/display";
+import {
+  TAXONOMY_CHIP_CLASS,
+  TaxonomyPill,
+} from "@/components/utility-components/taxonomy-chip";
+import { validateProductTaxonomy } from "@/utils/taxonomy/validation";
+
+function parseLiteralInput(rawValue: string): unknown {
+  if (!rawValue) return "";
+  try {
+    return JSON.parse(rawValue);
+  } catch {
+    return rawValue;
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function renderLiteralInputType(valueTypeRef: string): "text" | "number" {
+  const normalized = normalizeRef(valueTypeRef);
+  if (
+    normalized === "valtype:integer" ||
+    normalized === "valtype:year" ||
+    normalized === "valtype:decimal"
+  ) {
+    return "number";
+  }
+  return "text";
+}
 
 interface ProductFormProps {
   handleModalToggle: () => void;
@@ -82,6 +151,7 @@ export default function ProductForm({
   const { theme } = useTheme();
   const [images, setImages] = useState<string[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [taxonomyError, setTaxonomyError] = useState<string | null>(null);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [pubkey, setPubkey] = useState("");
   const [relayHint, setRelayHint] = useState("");
@@ -92,7 +162,19 @@ export default function ProductForm({
   const [isFlashSale, setIsFlashSale] = useState(false);
   const productEventContext = useContext(ProductContext);
   const profileContext = useContext(ProfileMapContext);
-  const { registry } = useContext(TaxonomyContext);
+  const { siteLanguage } = useContext(SiteLanguageContext);
+  const t = (key: string) => translateUi(siteLanguage, key);
+  const taxonomyContext = useContext(TaxonomyContext);
+  const { registry } = taxonomyContext;
+  const [taxonomyState, setTaxonomyState] = useState<TaxonomyState>(() =>
+    createEmptyListingTaxonomyState()
+  );
+  const [thingSearchQuery, setThingSearchQuery] = useState("");
+  const [showThingSearchSuggestions, setShowThingSearchSuggestions] =
+    useState(false);
+  const didInitializeRef = useRef(false);
+  const userTouchedFormRef = useRef(false);
+  const userEditedProductNameRef = useRef(false);
   const {
     signer,
     isLoggedIn,
@@ -100,7 +182,7 @@ export default function ProductForm({
   } = useContext(SignerContext);
   const { nostr } = useContext(NostrContext);
 
-  const { handleSubmit, control, reset, watch } = useForm({
+  const { handleSubmit, control, reset, watch, setValue } = useForm({
     defaultValues: oldValues
       ? {
           "Product Name": oldValues.title,
@@ -155,9 +237,42 @@ export default function ProductForm({
     }
   }, [signerPubKey]);
 
+  const implicitBusinessFunctionRef = registry?.nodeByRef[
+    "val:business_function:sell"
+  ]
+    ? "val:business_function:sell"
+    : "";
+
   useEffect(() => {
+    if (!showModal) {
+      didInitializeRef.current = false;
+      userTouchedFormRef.current = false;
+      userEditedProductNameRef.current = false;
+      return;
+    }
+
+    if (didInitializeRef.current && userTouchedFormRef.current) return;
+
     setImages(oldValues?.images || []);
-    setIsEdit(oldValues ? true : false);
+    setIsEdit(Boolean(oldValues));
+    setTaxonomyState(
+      registry
+        ? hydrateListingTaxonomyStateFromProduct(
+            {
+              overlayValRefs: oldValues?.taxonomy?.overlayValRefs || [],
+              primaryThingRef: oldValues?.taxonomy?.primaryThingRef || null,
+              refAssertions: oldValues?.taxonomy?.refAssertions || [],
+              literalAssertions: oldValues?.taxonomy?.literalAssertions || [],
+              implicitBusinessFunctionRef,
+            },
+            registry
+          )
+        : createEmptyListingTaxonomyState()
+    );
+    didInitializeRef.current = true;
+  }, [showModal, oldValues, registry, implicitBusinessFunctionRef]);
+
+  useEffect(() => {
     if (showModal && !oldValues && signerPubKey) {
       const profile = profileContext.profileData.get(signerPubKey);
       const hasLightning = !!(
@@ -167,7 +282,165 @@ export default function ProductForm({
     } else {
       setIsFlashSale(false);
     }
-  }, [showModal, signerPubKey, profileContext]);
+  }, [showModal, signerPubKey, profileContext, oldValues]);
+
+  const activeListingState = useMemo(
+    () =>
+      registry
+        ? buildActiveListingState(taxonomyState, registry, {
+            implicitBusinessFunctionRef,
+            locale: siteLanguage,
+          })
+        : null,
+    [implicitBusinessFunctionRef, registry, siteLanguage, taxonomyState]
+  );
+
+  const thingSearchSuggestions = useMemo(
+    () =>
+      registry
+        ? getThingSearchSuggestions(
+            registry,
+            thingSearchQuery,
+            siteLanguage,
+            60,
+            true
+          )
+        : [],
+    [registry, siteLanguage, thingSearchQuery]
+  );
+  const compatibleSegmentRefs = activeListingState?.compatibleSegmentRefs || [];
+  const availableSegmentRefs = activeListingState?.availableSegmentRefs || [];
+  const fixedSegmentRef = activeListingState?.fixedSegmentRef || "";
+  const selectedThingRef = activeListingState?.selectedThingRef || "";
+  const selectedSegmentRef = activeListingState?.primarySegmentRef || "";
+  const selectedSemanticContextRefs =
+    activeListingState?.selectedSemanticContextRefs || [];
+  const activeSelectedSegmentRefs =
+    activeListingState?.activeSelectedSegmentRefs || [];
+  const selectedSegmentRefs = activeListingState?.selectedSegmentRefs || [];
+  const serializedRequiredRefs =
+    activeListingState?.serializedRequiredRefs || [];
+  const requiredContextRefs = activeListingState?.requiredContextRefs || [];
+  const automaticRequiredContextRefs =
+    activeListingState?.automaticRequiredContextRefs || new Set<string>();
+  const semanticOverlayOptions =
+    activeListingState?.semanticOverlayOptions || [];
+  const overlayGroups = activeListingState?.overlayGroups || {};
+  const validLegacyOverlayRefs =
+    activeListingState?.validLegacyOverlayRefs || [];
+  const serializedOverlayValRefs =
+    activeListingState?.serializedOverlayValRefs || [];
+  const requiredPropRefs = activeListingState?.requiredPropRefs || [];
+  const orderedApplicablePropRefs =
+    activeListingState?.orderedApplicablePropRefs || [];
+  const propFieldTree = activeListingState?.propFieldTree || [];
+  const availableValuesByProp = activeListingState?.availableValuesByProp || {};
+  const propValueTypeByProp = activeListingState?.propValueTypeByProp || {};
+  const propTargetRefsByProp = activeListingState?.propTargetRefsByProp || {};
+  const selectedValueRefsByProp =
+    activeListingState?.selectedValueRefsByProp || {};
+  const selectedLiteralByProp = activeListingState?.selectedLiteralByProp || {};
+  const fieldLabelsByProp = activeListingState?.fieldLabelsByProp || {};
+  const literalPlaceholderByProp =
+    activeListingState?.literalPlaceholderByProp || {};
+  const autoProductName = activeListingState?.autoProductName || "";
+  const missingRequiredContextRefs =
+    activeListingState?.missingRequiredContextRefs || [];
+  const missingRequiredPropRefs =
+    activeListingState?.missingRequiredPropRefs || [];
+  const hasAnyTaxonomyAttribute = Boolean(activeListingState?.hasAnyAttribute);
+  const unselectedAvailableSegmentRefs = availableSegmentRefs.filter(
+    (ref) => normalizeRef(ref) !== normalizeRef(selectedSegmentRef)
+  );
+
+  const dispatchTaxonomyAction = useCallback(
+    (action: (current: TaxonomyState) => TaxonomyState) => {
+      if (!registry) return;
+      setTaxonomyState((current) => action(current));
+      setTaxonomyError(null);
+    },
+    [registry]
+  );
+
+  const resetTaxonomySelections = useCallback(
+    (
+      _source: string = "taxonomy reset",
+      overrides: Partial<{
+        primarySegmentRef: string | null;
+        primaryThingRef: string | null;
+        selectedThingPath: string[];
+      }> = {}
+    ) => {
+      if (registry) {
+        dispatchTaxonomyAction((current) =>
+          clearListingTaxonomySelections(current, registry, {
+            segmentRef: Object.prototype.hasOwnProperty.call(
+              overrides,
+              "primarySegmentRef"
+            )
+              ? (overrides.primarySegmentRef ?? null)
+              : current.segmentRef,
+            thingRef: Object.prototype.hasOwnProperty.call(
+              overrides,
+              "primaryThingRef"
+            )
+              ? (overrides.primaryThingRef ?? null)
+              : current.thingRef,
+            thingPath: Object.prototype.hasOwnProperty.call(
+              overrides,
+              "selectedThingPath"
+            )
+              ? overrides.selectedThingPath || []
+              : current.thingPath,
+          })
+        );
+      }
+      setTaxonomyError(null);
+    },
+    [dispatchTaxonomyAction, registry]
+  );
+
+  const selectThingFromSearch = (suggestion: TaxonomySearchSuggestion) => {
+    if (!registry) return;
+    const nextTaxonomyState = selectThingForListing(
+      taxonomyState,
+      suggestion.ref,
+      registry
+    );
+
+    userTouchedFormRef.current = true;
+    setThingSearchQuery(suggestion.label);
+    setShowThingSearchSuggestions(false);
+    setTaxonomyState(nextTaxonomyState);
+    setTaxonomyError(null);
+  };
+
+  const setSelectedCategorySegments = (nextSegmentRefs: string[]) => {
+    if (!registry) return;
+    const nextSegmentRef =
+      uniqueStrings(nextSegmentRefs.map(normalizeRef))
+        .filter((ref) => ref.startsWith("val:context:segment:"))
+        .find(Boolean) || "";
+    dispatchTaxonomyAction((current) =>
+      selectCompatibleSegmentForListing(
+        current,
+        nextSegmentRef || null,
+        compatibleSegmentRefs,
+        registry
+      )
+    );
+  };
+
+  const clearSelectedThing = () => {
+    if (!registry) return;
+    setThingSearchQuery("");
+    setShowThingSearchSuggestions(false);
+    resetTaxonomySelections("thing cleared", {
+      primarySegmentRef: null,
+      primaryThingRef: null,
+      selectedThingPath: [],
+    });
+  };
 
   const onSubmit = async (data: {
     [x: string]: string | Map<string, number> | string[];
@@ -178,6 +451,69 @@ export default function ProductForm({
     } else {
       setImageError(null);
     }
+
+    if (registry && !activeListingState?.selectedThingRef) {
+      setTaxonomyError("Choose what type of item you are listing.");
+      return;
+    }
+    if (registry && !activeListingState?.selectedThingExists) {
+      setTaxonomyError("Choose a valid item type.");
+      return;
+    }
+    if (registry && !activeListingState?.hasRequiredSegment) {
+      setTaxonomyError("Choose at least one marketplace segment.");
+      return;
+    }
+    if (registry && !activeListingState?.hasExactlyOneSegment) {
+      setTaxonomyError("Choose exactly one marketplace segment.");
+      return;
+    }
+    if (
+      registry &&
+      activeListingState?.submitBlockReason === "multiple_required_segments"
+    ) {
+      setTaxonomyError(
+        "This item type has more than one required segment in the taxonomy."
+      );
+      return;
+    }
+    if (
+      registry &&
+      fixedSegmentRef &&
+      activeListingState?.primarySegmentRef !== fixedSegmentRef
+    ) {
+      setTaxonomyError(
+        "Use the required marketplace segment for this item type."
+      );
+      return;
+    }
+    if (missingRequiredContextRefs.length > 0 && registry) {
+      setTaxonomyError(
+        `Complete the required context: ${missingRequiredContextRefs
+          .map((ref) => getTaxonomyNodeLabel(registry, ref, siteLanguage))
+          .join(", ")}`
+      );
+      return;
+    }
+    if (missingRequiredPropRefs.length > 0 && registry) {
+      setTaxonomyError(
+        `Complete the required details: ${missingRequiredPropRefs
+          .map((propRef) =>
+            getTaxonomyNodeLabel(registry, propRef, siteLanguage)
+          )
+          .join(", ")}`
+      );
+      return;
+    }
+    if (
+      orderedApplicablePropRefs.length > 0 &&
+      !hasAnyTaxonomyAttribute &&
+      typeof window !== "undefined" &&
+      !window.confirm("You haven’t filled out any attributes. Continue?")
+    ) {
+      return;
+    }
+    setTaxonomyError(null);
 
     setIsPostingOrUpdatingProduct(true);
     const hashHex = CryptoJS.SHA256(data["Product Name"] as string).toString(
@@ -209,19 +545,68 @@ export default function ProductForm({
       tags.push(["image", image]);
     });
 
-    (data["Category"] as string).split(",").forEach((category) => {
-      tags.push(["t", category]);
-    });
+    const manualCategories =
+      typeof data["Category"] === "string"
+        ? (data["Category"] as string)
+            .split(",")
+            .map((category) => category.trim())
+            .filter(Boolean)
+        : [];
+    const taxonomyDerivedCategories = registry
+      ? deriveLegacyCategoryTags(
+          registry,
+          selectedThingRef,
+          serializedOverlayValRefs,
+          siteLanguage
+        )
+      : [];
+    uniqueStrings([...manualCategories, ...taxonomyDerivedCategories]).forEach(
+      (category) => {
+        tags.push(["t", category]);
+      }
+    );
     tags.push(["t", "shopstr"]);
 
-    if (oldValues?.taxonomy) {
-      try {
-        tags.push(...encodeTaxonomyAssertions(oldValues.taxonomy));
-        tags.push(...encodeTaxonomyAddressTags(oldValues.taxonomy, registry));
-      } catch (error) {
-        console.warn("Skipping invalid Taxonostr taxonomy assertions:", error);
+    const taxonomyRefAssertionsList: ProductTaxonomyRefAssertion[] =
+      activeListingState
+        ? buildListingTaxonomyRefAssertions(activeListingState)
+        : [];
+    const taxonomyLiteralAssertionsList: ProductTaxonomyLiteralAssertion[] =
+      Object.entries(selectedLiteralByProp)
+        .filter(([_, value]) => String(value).trim().length > 0)
+        .map(([propRef, value]) => ({
+          propRef,
+          valueTypeRef: propValueTypeByProp[propRef] || "valtype:text",
+          value: parseLiteralInput(String(value)),
+        }));
+
+    const listingTaxonomy: ProductTaxonomy = {
+      primaryThingRef: selectedThingRef
+        ? normalizeRef(selectedThingRef)
+        : undefined,
+      overlayValRefs: serializedOverlayValRefs.map(normalizeRef),
+      requiredRefs: serializedRequiredRefs.map(normalizeRef),
+      refAssertions: taxonomyRefAssertionsList,
+      literalAssertions: taxonomyLiteralAssertionsList,
+    };
+
+    if (registry) {
+      const validation = validateProductTaxonomy(listingTaxonomy, registry, {
+        mode: "publish",
+        content: String(data["Description"] || ""),
+        implicitBusinessFunctionRef,
+      });
+      if (!validation.ok) {
+        setTaxonomyError(validation.errors.join(" "));
+        setIsPostingOrUpdatingProduct(false);
+        return;
+      }
+      if (validation.warnings.length > 0) {
+        console.warn("Taxonostr taxonomy warnings:", validation.warnings);
       }
     }
+    tags.push(...encodeTaxonomyAssertions(listingTaxonomy));
+    tags.push(...encodeTaxonomyAddressTags(listingTaxonomy, registry));
 
     if (data["Quantity"]) {
       tags.push(["quantity", data["Quantity"].toString()]);
@@ -353,12 +738,27 @@ export default function ProductForm({
   const clear = () => {
     handleModalToggle();
     setImages([]);
+    resetTaxonomySelections();
     reset();
     setCurrentSlide(0);
+    setLastAutoProductName("");
+    didInitializeRef.current = false;
+    userTouchedFormRef.current = false;
+    userEditedProductNameRef.current = false;
   };
 
   const watchShippingOption = watch("Shipping Option");
   const watchCurrency = watch("Currency");
+  const watchProductName = watch("Product Name");
+  const [lastAutoProductName, setLastAutoProductName] = useState("");
+
+  useEffect(() => {
+    if (!autoProductName || userEditedProductNameRef.current) return;
+    if (!watchProductName || watchProductName === lastAutoProductName) {
+      setValue("Product Name", autoProductName, { shouldDirty: true });
+      setLastAutoProductName(autoProductName);
+    }
+  }, [autoProductName, lastAutoProductName, setValue, watchProductName]);
 
   const deleteImage = (index: number) => () => {
     setImages((prevValues) => {
@@ -375,6 +775,132 @@ export default function ProductForm({
   const currencyOptions = Object.keys(currencySelection).map((code) => ({
     value: code,
   }));
+
+  const renderPropField = (node: PropRenderNode, depth: number = 0) => {
+    if (!registry) return null;
+    const propRef = node.propRef;
+    const propNode = registry.nodeByRef[propRef];
+    if (!propNode) return null;
+    const propLabel =
+      fieldLabelsByProp[propRef] ||
+      getTaxonomyNodeLabel(registry, propRef, siteLanguage);
+    const isRequiredProp = requiredPropRefs.includes(propRef);
+    const refOptions = availableValuesByProp[propRef] || [];
+    const literalValueTypeRef = propValueTypeByProp[propRef] || "";
+    const propNodeTargets = propTargetRefsByProp[propRef] || [];
+    if (
+      !isRequiredProp &&
+      propNodeTargets.length > 0 &&
+      refOptions.length === 0
+    ) {
+      return null;
+    }
+    if (
+      !isRequiredProp &&
+      propNodeTargets.length === 0 &&
+      !literalValueTypeRef
+    ) {
+      return null;
+    }
+
+    return (
+      <div
+        key={propRef}
+        className={
+          depth > 0
+            ? "border-default-200 dark:border-default-700 space-y-2 border-l pl-3"
+            : "space-y-2"
+        }
+      >
+        <div className="space-y-1">
+          <label className="text-light-text dark:text-dark-text block text-sm font-medium">
+            {propLabel}
+            {isRequiredProp ? " *" : ""}
+          </label>
+          {propNodeTargets.length > 0 ? (
+            <select
+              data-tax-prop={propRef}
+              className="text-light-text dark:text-dark-text w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm dark:border-gray-700"
+              value={selectedValueRefsByProp[propRef]?.[0] || ""}
+              onChange={(e) => {
+                const valueRef = e.target.value;
+                dispatchTaxonomyAction((current) =>
+                  valueRef
+                    ? setPropValueForListing(
+                        current,
+                        propRef,
+                        [valueRef],
+                        registry
+                      )
+                    : clearPropForListing(current, propRef, registry)
+                );
+              }}
+            >
+              <option value="">{t("Choose an option")}</option>
+              {refOptions.map((valueRef) => (
+                <option key={valueRef} value={valueRef}>
+                  {getTaxonomyNodeLabel(registry, valueRef, siteLanguage)}
+                </option>
+              ))}
+            </select>
+          ) : normalizeRef(literalValueTypeRef) === "valtype:boolean" ? (
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={
+                  String(selectedLiteralByProp[propRef] || "") === "true"
+                }
+                onChange={(e) => {
+                  dispatchTaxonomyAction((current) =>
+                    setLiteralForListing(
+                      current,
+                      propRef,
+                      e.target.checked ? "true" : "false",
+                      registry
+                    )
+                  );
+                }}
+              />
+              <span className="text-sm text-gray-500">{propLabel}</span>
+            </div>
+          ) : (
+            <Input
+              className="text-light-text dark:text-dark-text"
+              variant="bordered"
+              value={String(selectedLiteralByProp[propRef] || "")}
+              onChange={(e) =>
+                dispatchTaxonomyAction((current) =>
+                  setLiteralForListing(
+                    current,
+                    propRef,
+                    e.target.value,
+                    registry
+                  )
+                )
+              }
+              type={
+                literalValueTypeRef
+                  ? renderLiteralInputType(literalValueTypeRef)
+                  : "text"
+              }
+              placeholder={
+                normalizeRef(literalValueTypeRef) === "valtype:quantitative"
+                  ? '{"value": 1, "unit": "count"}'
+                  : literalPlaceholderByProp[propRef] || "Enter value"
+              }
+            />
+          )}
+        </div>
+        {node.children.length > 0 && (
+          <div className="space-y-3">
+            {node.children.map((childNode) =>
+              renderPropField(childNode, depth + 1)
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <Modal
@@ -397,6 +923,9 @@ export default function ProductForm({
           Add New Product Listing
         </ModalHeader>
         <form
+          onChangeCapture={() => {
+            userTouchedFormRef.current = true;
+          }}
           onSubmit={(e) => {
             if (e.target !== e.currentTarget) {
               e.preventDefault();
@@ -405,6 +934,357 @@ export default function ProductForm({
           }}
         >
           <ModalBody>
+            {registry && (
+              <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-light-text dark:text-dark-text text-sm font-semibold">
+                      Listing taxonomy
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Search for a specific item type first, then choose only
+                      categories that apply.
+                    </p>
+                  </div>
+                  {taxonomyContext.isLoading && (
+                    <span className="text-xs text-gray-500">
+                      {t("Loading…")}
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-light-text dark:text-dark-text mb-1 block text-sm font-medium">
+                      What type of item are you listing?
+                    </label>
+                    <div className="relative">
+                      <input
+                        value={thingSearchQuery}
+                        onFocus={() => setShowThingSearchSuggestions(true)}
+                        onChange={(event) => {
+                          setThingSearchQuery(event.target.value);
+                          setShowThingSearchSuggestions(true);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            setShowThingSearchSuggestions(false);
+                          }
+                        }}
+                        placeholder="Search item types"
+                        className="text-light-text dark:text-dark-text w-full rounded-md border border-gray-300 bg-transparent p-2 text-sm dark:border-gray-700"
+                      />
+                      {showThingSearchSuggestions &&
+                        thingSearchSuggestions.length > 0 && (
+                          <div className="absolute top-full right-0 left-0 z-50 mt-2 max-h-80 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-neutral-900">
+                            {thingSearchSuggestions.map((suggestion) => (
+                              <button
+                                key={suggestion.ref}
+                                type="button"
+                                className="hover:bg-default-100 dark:hover:bg-default-800 flex w-full items-center gap-3 px-3 py-2 text-left text-sm"
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  selectThingFromSearch(suggestion);
+                                }}
+                              >
+                                <span className="bg-default-100 text-default-500 dark:bg-default-800 flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md text-sm font-semibold">
+                                  {suggestion.image ? (
+                                    <Image
+                                      src={suggestion.image}
+                                      alt=""
+                                      width={40}
+                                      height={40}
+                                      radius="none"
+                                      className="h-full w-full object-cover object-center"
+                                    />
+                                  ) : (
+                                    suggestion.label.slice(0, 1)
+                                  )}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="text-light-text dark:text-dark-text block truncate font-medium">
+                                    {suggestion.label}
+                                  </span>
+                                  {suggestion.parentLabel && (
+                                    <span className="block truncate text-xs text-gray-500">
+                                      {suggestion.parentLabel}
+                                    </span>
+                                  )}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                    </div>
+                  </div>
+
+                  {(Boolean(selectedThingRef) ||
+                    Boolean(selectedSegmentRef) ||
+                    selectedSemanticContextRefs.length > 0 ||
+                    serializedRequiredRefs.length > 0) && (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedThingRef && (
+                        <TaxonomyPill
+                          label={getTaxonomyDisplayLabel(
+                            registry,
+                            selectedThingRef,
+                            siteLanguage,
+                            "listingType"
+                          )}
+                          imageUrl={registry.imageByRef[selectedThingRef]}
+                          selected
+                          removable
+                          removeLabel={`Remove ${getTaxonomyDisplayLabel(
+                            registry,
+                            selectedThingRef,
+                            siteLanguage,
+                            "listingType"
+                          )}`}
+                          onRemove={clearSelectedThing}
+                        />
+                      )}
+                      {selectedSegmentRef && (
+                        <TaxonomyPill
+                          label={`${getTaxonomyDisplayLabel(
+                            registry,
+                            selectedSegmentRef,
+                            siteLanguage,
+                            "category"
+                          )}${fixedSegmentRef ? " (required)" : ""}`}
+                          imageUrl={registry.imageByRef[selectedSegmentRef]}
+                          selected
+                          removable={!fixedSegmentRef}
+                          removeLabel={`Remove ${getTaxonomyDisplayLabel(
+                            registry,
+                            selectedSegmentRef,
+                            siteLanguage,
+                            "category"
+                          )}`}
+                          onRemove={
+                            !fixedSegmentRef
+                              ? () => setSelectedCategorySegments([])
+                              : undefined
+                          }
+                        />
+                      )}
+                      {selectedSemanticContextRefs
+                        .filter(
+                          (ref) =>
+                            !activeSelectedSegmentRefs.includes(
+                              normalizeRef(ref)
+                            )
+                        )
+                        .map((ref) => {
+                          const isRequiredContext =
+                            automaticRequiredContextRefs.has(normalizeRef(ref));
+                          return (
+                            <TaxonomyPill
+                              key={ref}
+                              label={`${getTaxonomyDisplayLabel(
+                                registry,
+                                ref,
+                                siteLanguage,
+                                "category"
+                              )}${isRequiredContext ? " (required)" : ""}`}
+                              imageUrl={registry.imageByRef[ref]}
+                              selected
+                              removable={!isRequiredContext}
+                              removeLabel={`Remove ${getTaxonomyDisplayLabel(
+                                registry,
+                                ref,
+                                siteLanguage,
+                                "category"
+                              )}`}
+                              onRemove={
+                                !isRequiredContext
+                                  ? () =>
+                                      dispatchTaxonomyAction((current) =>
+                                        removeOverlayForListing(
+                                          current,
+                                          ref,
+                                          registry
+                                        )
+                                      )
+                                  : undefined
+                              }
+                            />
+                          );
+                        })}
+                      {requiredContextRefs
+                        .filter(
+                          (ref) =>
+                            !selectedSemanticContextRefs
+                              .map(normalizeRef)
+                              .includes(normalizeRef(ref))
+                        )
+                        .map((ref) => (
+                          <TaxonomyPill
+                            key={ref}
+                            label={`${getTaxonomyDisplayLabel(
+                              registry,
+                              ref,
+                              siteLanguage,
+                              "category"
+                            )} (required)`}
+                            imageUrl={registry.imageByRef[ref]}
+                            selected
+                          />
+                        ))}
+                    </div>
+                  )}
+
+                  {selectedThingRef &&
+                    unselectedAvailableSegmentRefs.length > 0 && (
+                      <div>
+                        <label className="text-light-text dark:text-dark-text mb-2 block text-sm font-medium">
+                          Choose categories that apply:
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {unselectedAvailableSegmentRefs
+                            .slice()
+                            .sort((a, b) =>
+                              getTaxonomyNodeLabel(
+                                registry,
+                                a,
+                                siteLanguage
+                              ).localeCompare(
+                                getTaxonomyNodeLabel(registry, b, siteLanguage),
+                                siteLanguage
+                              )
+                            )
+                            .map((ref) => (
+                              <Chip
+                                key={ref}
+                                size="sm"
+                                variant="bordered"
+                                color="default"
+                                className={`${TAXONOMY_CHIP_CLASS} cursor-pointer`}
+                                onClick={() => {
+                                  setSelectedCategorySegments([ref]);
+                                }}
+                              >
+                                {getTaxonomyDisplayLabel(
+                                  registry,
+                                  ref,
+                                  siteLanguage,
+                                  "category"
+                                )}
+                              </Chip>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+
+                  {selectedThingRef && semanticOverlayOptions.length > 0 && (
+                    <div className="space-y-2 rounded-md border border-gray-200 p-3 dark:border-gray-800">
+                      {Object.entries(overlayGroups).map(
+                        ([groupLabel, refs]) => (
+                          <div key={groupLabel} className="space-y-2">
+                            <p className="text-xs font-medium text-gray-500">
+                              {groupLabel}
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {refs
+                                .slice()
+                                .filter(
+                                  (ref) =>
+                                    !selectedSemanticContextRefs.includes(ref)
+                                )
+                                .sort((a, b) =>
+                                  getTaxonomyNodeLabel(
+                                    registry,
+                                    a,
+                                    siteLanguage
+                                  ).localeCompare(
+                                    getTaxonomyNodeLabel(
+                                      registry,
+                                      b,
+                                      siteLanguage
+                                    ),
+                                    siteLanguage
+                                  )
+                                )
+                                .map((ref) => (
+                                  <Chip
+                                    key={ref}
+                                    size="sm"
+                                    variant="bordered"
+                                    color="default"
+                                    className={`${TAXONOMY_CHIP_CLASS} cursor-pointer`}
+                                    onClick={() => {
+                                      dispatchTaxonomyAction((current) =>
+                                        toggleContextForListing(
+                                          current,
+                                          ref,
+                                          registry
+                                        )
+                                      );
+                                    }}
+                                  >
+                                    {getTaxonomyNodeLabel(
+                                      registry,
+                                      ref,
+                                      siteLanguage
+                                    )}
+                                  </Chip>
+                                ))}
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  )}
+
+                  {validLegacyOverlayRefs.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500">
+                        Legacy taxonomy refs are preserved on save but do not
+                        affect the live form unless you migrate them.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {validLegacyOverlayRefs.map((ref) => (
+                          <Chip
+                            key={ref}
+                            size="sm"
+                            variant="bordered"
+                            className={TAXONOMY_CHIP_CLASS}
+                            onClose={() =>
+                              dispatchTaxonomyAction((current) =>
+                                removeOverlayForListing(current, ref, registry)
+                              )
+                            }
+                          >
+                            {getTaxonomyNodeLabel(registry, ref, siteLanguage)}
+                          </Chip>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {taxonomyError && (
+                    <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
+                      {taxonomyError}
+                    </div>
+                  )}
+
+                  {selectedSegmentRefs.length > 0 &&
+                    orderedApplicablePropRefs.length > 0 && (
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-light-text dark:text-dark-text text-sm font-medium">
+                            {t("Dynamic attributes")}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            These fields update automatically from the category,
+                            subcategory, and extra details you choose.
+                          </p>
+                        </div>
+                        {propFieldTree.map((node) => renderPropField(node))}
+                      </div>
+                    )}
+                </div>
+              </div>
+            )}
             <Controller
               name="Product Name"
               control={control}
@@ -427,7 +1307,10 @@ export default function ProductForm({
                     isInvalid={isErrored}
                     errorMessage={errorMessage}
                     // controller props
-                    onChange={onChange} // send value to hook form
+                    onChange={(event) => {
+                      userEditedProductNameRef.current = true;
+                      onChange(event);
+                    }} // send value to hook form
                     onBlur={onBlur} // notify when input is touched/blur
                     value={value}
                   />
