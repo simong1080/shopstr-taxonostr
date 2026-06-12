@@ -517,11 +517,16 @@ export function buildMarketplaceResultsViewModel(params: {
     )
   );
 
-  const scopedProductsForFilterOptions = (excludedPropRef: string) =>
-    scopedListingProducts.filter((product) => {
-      const selectedValuesForOptions = mergeSelectedValuesByProp(
-        selectedFacetAssertionsFor(excludedPropRef)
-      );
+  const scopedProductsForFilterOptions = (excludedPropRef: string) => {
+    const selectedValuesForOptions = mergeSelectedValuesByProp(
+      selectedFacetAssertionsFor(excludedPropRef)
+    );
+    const filters = Object.fromEntries(
+      Object.entries(selectedAspectFilters).filter(
+        ([propRef]) => propRef !== excludedPropRef
+      )
+    );
+    return scopedListingProducts.filter((product) => {
       if (
         !productSatisfiesSelectedScopeValues(
           product,
@@ -532,13 +537,9 @@ export function buildMarketplaceResultsViewModel(params: {
       ) {
         return false;
       }
-      const filters = Object.fromEntries(
-        Object.entries(selectedAspectFilters).filter(
-          ([propRef]) => propRef !== excludedPropRef
-        )
-      );
       return productSatisfiesSelectedAspectFilters(product, filters, registry);
     });
+  };
 
   const selectedFacetChips: MarketplaceSelectedFacetChip[] = registry
     ? explicitFacetAssertions.map((assertion) => ({

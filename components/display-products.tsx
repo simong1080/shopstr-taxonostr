@@ -118,7 +118,10 @@ const DisplayProducts = ({
   >({});
   const [showAllFilters, setShowAllFilters] = useState(false);
   const [openFilterRef, setOpenFilterRef] = useState("");
-  const scopeState = buildActiveMarketplaceState(router.query, registry);
+  const scopeState = useMemo(
+    () => buildActiveMarketplaceState(router.query, registry),
+    [registry, router.asPath]
+  );
   const selectedContextRef = scopeState.contextRef;
   const selectedThingRef = scopeState.thingRef;
   const selectedContextNode =
@@ -135,23 +138,29 @@ const DisplayProducts = ({
   const hasSearchQuery = selectedSearch.trim().length > 0;
   const forceListingsForSearch =
     showTaxonostrMarketplaceChrome && hasSearchQuery;
-  const resultsScopeState = showTaxonostrMarketplaceChrome
-    ? {
-        ...scopeState,
-        pageMode: forceListingsForSearch
-          ? ("listings" as const)
-          : scopeState.pageMode,
-        showListings: forceListingsForSearch ? true : scopeState.showListings,
-      }
-    : {
-        ...scopeState,
-        contextRef: "",
-        thingRef: "",
-        selectedValuesByProp: {},
-        autoActiveRequiredRefs: [],
-        pageMode: "listings" as const,
-        showListings: true,
-      };
+  const resultsScopeState = useMemo(
+    () =>
+      showTaxonostrMarketplaceChrome
+        ? {
+            ...scopeState,
+            pageMode: forceListingsForSearch
+              ? ("listings" as const)
+              : scopeState.pageMode,
+            showListings: forceListingsForSearch
+              ? true
+              : scopeState.showListings,
+          }
+        : {
+            ...scopeState,
+            contextRef: "",
+            thingRef: "",
+            selectedValuesByProp: {},
+            autoActiveRequiredRefs: [],
+            pageMode: "listings" as const,
+            showListings: true,
+          },
+    [forceListingsForSearch, scopeState, showTaxonostrMarketplaceChrome]
+  );
   const shouldShowListings = showTaxonostrMarketplaceChrome
     ? forceListingsForSearch || shouldShowListingsForScope(scopeState)
     : !isMyListings;
@@ -165,8 +174,6 @@ const DisplayProducts = ({
     !selectedThingRef &&
     scopeState.pageMode === "browse";
   const selectedScopeValuesByProp = scopeState.selectedValuesByProp;
-  const selectedScopeValuesKey = JSON.stringify(selectedScopeValuesByProp);
-  const autoActiveRequiredRefsKey = scopeState.autoActiveRequiredRefs.join("|");
   const marketplaceResults = useMemo(
     () =>
       buildMarketplaceResultsViewModel({
@@ -191,26 +198,33 @@ const DisplayProducts = ({
       focusedPubkey,
       userPubkey,
       siteLanguage,
-      selectedContextRef,
-      selectedThingRef,
-      shouldShowListings,
-      selectedScopeValuesKey,
-      autoActiveRequiredRefsKey,
+      resultsScopeState,
     ]
   );
   const actualFacetFilters = marketplaceResults.actualFacetFilters;
   const selectedFacetChips = marketplaceResults.selectedFacetChips;
   const baseScopeResultCount = marketplaceResults.baseScopeResultCount;
   const filteredResultCount = marketplaceResults.filteredResultCount;
-  const scopeNavigationSections =
-    registry && isListingResultPage
-      ? buildMarketplaceNavSections({
-          mode: selectedContextRef || selectedThingRef ? "localScope" : "root",
-          registry,
-          scopeState,
-          locale: siteLanguage,
-        })
-      : [];
+  const scopeNavigationSections = useMemo(
+    () =>
+      registry && isListingResultPage
+        ? buildMarketplaceNavSections({
+            mode:
+              selectedContextRef || selectedThingRef ? "localScope" : "root",
+            registry,
+            scopeState,
+            locale: siteLanguage,
+          })
+        : [],
+    [
+      isListingResultPage,
+      registry,
+      scopeState,
+      selectedContextRef,
+      selectedThingRef,
+      siteLanguage,
+    ]
+  );
   const quickFilterLimit = 8;
   const rootNavSections = useMemo(() => {
     if (!registry || !isMarketplaceBrowseHome) return [];
@@ -249,11 +263,13 @@ const DisplayProducts = ({
       query: router.query,
       registry,
     });
-    if (!normalized.changed) return;
+    const currentHref = router.asPath.split("#")[0] || "/marketplace";
+    if (!normalized.changed || normalized.href === currentHref) return;
     router.replace(normalized.href, undefined, { shallow: true });
   }, [
     registry,
     router,
+    router.asPath,
     router.isReady,
     router.query,
     showTaxonostrMarketplaceChrome,

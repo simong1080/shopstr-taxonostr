@@ -82,7 +82,7 @@ export function getTaxonomyRefsForIndexing(
   taxonomy?: ProductTaxonomy
 ): string[] {
   if (!taxonomy) return [];
-  return [
+  const refs = [
     taxonomy.primaryThingRef,
     ...(taxonomy.overlayValRefs || []),
     ...(taxonomy.requiredRefs || []),
@@ -96,8 +96,8 @@ export function getTaxonomyRefsForIndexing(
     ]),
   ]
     .map((ref) => normalizeTaxonomyRef(ref || ""))
-    .filter(Boolean)
-    .filter((ref, index, refs) => refs.indexOf(ref) === index);
+    .filter(Boolean);
+  return Array.from(new Set(refs));
 }
 
 export function encodeTaxonomyAddressTags(
@@ -105,14 +105,13 @@ export function encodeTaxonomyAddressTags(
   registry: TaxonomyRegistry | null | undefined
 ): Array<["a", string]> {
   if (!registry) return [];
-  return getTaxonomyRefsForIndexing(taxonomy)
+  const coordinates = getTaxonomyRefsForIndexing(taxonomy)
     .map((ref) => registry.nodeByRef[ref]?.coordinate || "")
-    .filter(Boolean)
-    .filter(
-      (coordinate, index, coordinates) =>
-        coordinates.indexOf(coordinate) === index
-    )
-    .map((coordinate) => ["a", coordinate]);
+    .filter(Boolean);
+  return Array.from(new Set(coordinates)).map((coordinate): ["a", string] => [
+    "a",
+    coordinate,
+  ]);
 }
 
 export function decodeTaxonomyAssertions(tags: string[][]): ProductTaxonomy {
