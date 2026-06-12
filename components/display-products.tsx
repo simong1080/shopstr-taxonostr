@@ -1,15 +1,17 @@
-import { useState, useEffect, useContext } from "react";
+import { useState, useEffect, useContext, useMemo } from "react";
 import { deleteEvent } from "@/utils/nostr/nostr-helper-functions";
 import { NostrEvent } from "../utils/types/types";
 import {
   ProductContext,
+  ProfileMapContext,
   FollowsContext,
   RelaysContext,
+  SiteLanguageContext,
+  TaxonomyContext,
 } from "../utils/context/context";
-import ProductCard from "./utility-components/product-card";
 import DisplayProductModal from "./display-product-modal";
 import { SHOPSTRBUTTONCLASSNAMES } from "@/utils/STATIC-VARIABLES";
-import { Button, Pagination } from "@heroui/react";
+import { Button } from "@heroui/react";
 import ShopstrSpinner from "./utility-components/shopstr-spinner";
 import { useRouter } from "next/router";
 import parseTags, {
@@ -21,13 +23,42 @@ import {
   SignerContext,
 } from "@/components/utility-components/nostr-context-provider";
 import { getListingSlug } from "@/utils/url-slugs";
-import { productSatisfiesAllFilters } from "@/utils/parsers/product-filter-helpers";
 import {
   dedupeProductEvents,
   fetchNip50ProductSearch,
   getProductEventKey,
 } from "@/utils/nostr/fetch-service";
 import { nip19 } from "nostr-tools";
+import { normalizeTaxonomyRef } from "@/utils/taxonomy/registry";
+import MarketplaceBreadcrumbs from "@/components/marketplace/marketplace-breadcrumbs";
+import MarketplaceBrowseSections, {
+  MarketplaceBrowseSection,
+} from "@/components/marketplace/marketplace-browse-sections";
+import MarketplaceFilterBar, {
+  MarketplaceLiteralFacetChip,
+} from "@/components/marketplace/marketplace-filter-bar";
+import MarketplaceListingsPanel from "@/components/marketplace/marketplace-listings-panel";
+import MarketplaceScopeSidebar from "@/components/marketplace/marketplace-scope-sidebar";
+import {
+  buildActiveMarketplaceState,
+  buildMarketplaceBrowseNavSections,
+  buildMarketplaceNavSections,
+  buildMarketplaceNavigationHref,
+  getMarketplaceNavHref,
+  MarketplaceNavSection,
+  MarketplaceNavItem,
+  shouldShowListingsForScope,
+} from "@/utils/taxonomy/marketplace-scope";
+import { getNodeImage } from "@/utils/taxonomy/search";
+import {
+  buildMarketplaceHref,
+  normalizeMarketplaceUrlQuery,
+} from "@/utils/taxonomy/routing";
+import { buildMarketplaceResultsViewModel } from "@/utils/taxonomy/marketplace-results";
+import {
+  getTaxonomyDisplayLabel,
+  getTaxonomyTileImages,
+} from "@/utils/taxonomy/display";
 
 const isNip19SearchQuery = (search: string) => {
   const normalizedSearch = search.trim();
@@ -64,6 +95,7 @@ const DisplayProducts = ({
   );
   const [isNip50SearchLoading, setIsNip50SearchLoading] = useState(false);
   const productEventContext = useContext(ProductContext);
+  const profileMapContext = useContext(ProfileMapContext);
   const followsContext = useContext(FollowsContext);
   const relaysContext = useContext(RelaysContext);
   const [focusedProduct, setFocusedProduct] = useState<ProductData>();
@@ -79,6 +111,127 @@ const DisplayProducts = ({
 
   const { nostr } = useContext(NostrContext);
   const { signer, pubkey: userPubkey } = useContext(SignerContext);
+  const { registry } = useContext(TaxonomyContext);
+  const { siteLanguage } = useContext(SiteLanguageContext);
+  const [selectedAspectFilters, setSelectedAspectFilters] = useState<
+    Record<string, string>
+  >({});
+  const [showAllFilters, setShowAllFilters] = useState(false);
+  const [openFilterRef, setOpenFilterRef] = useState("");
+  const scopeState = buildActiveMarketplaceState(router.query, registry);
+  const selectedContextRef = scopeState.contextRef;
+  const selectedThingRef = scopeState.thingRef;
+  const selectedContextNode =
+    selectedContextRef && registry
+      ? registry.nodeByRef[selectedContextRef]
+      : undefined;
+  const selectedThingNode =
+    selectedThingRef && registry
+      ? registry.nodeByRef[selectedThingRef]
+      : undefined;
+  const useFocusedShopListingMode = Boolean(focusedPubkey);
+  const showTaxonostrMarketplaceChrome =
+    !isMyListings && !useFocusedShopListingMode;
+  const hasSearchQuery = selectedSearch.trim().length > 0;
+  const forceListingsForSearch =
+    showTaxonostrMarketplaceChrome && hasSearchQuery;
+  const resultsScopeState = showTaxonostrMarketplaceChrome
+    ? {
+        ...scopeState,
+        pageMode: forceListingsForSearch
+          ? ("listings" as const)
+          : scopeState.pageMode,
+        showListings: forceListingsForSearch ? true : scopeState.showListings,
+      }
+    : {
+        ...scopeState,
+        contextRef: "",
+        thingRef: "",
+        selectedValuesByProp: {},
+        autoActiveRequiredRefs: [],
+        pageMode: "listings" as const,
+        showListings: true,
+      };
+  const shouldShowListings = showTaxonostrMarketplaceChrome
+    ? forceListingsForSearch || shouldShowListingsForScope(scopeState)
+    : !isMyListings;
+  const isListingResultPage =
+    showTaxonostrMarketplaceChrome &&
+    (forceListingsForSearch || scopeState.pageMode === "listings");
+  const isMarketplaceBrowseHome =
+    showTaxonostrMarketplaceChrome &&
+    !forceListingsForSearch &&
+    !selectedContextRef &&
+    !selectedThingRef &&
+    scopeState.pageMode === "browse";
+  const selectedScopeValuesByProp = scopeState.selectedValuesByProp;
+  const selectedScopeValuesKey = JSON.stringify(selectedScopeValuesByProp);
+  const autoActiveRequiredRefsKey = scopeState.autoActiveRequiredRefs.join("|");
+  const marketplaceResults = useMemo(
+    () =>
+      buildMarketplaceResultsViewModel({
+        products: productEvents,
+        registry,
+        scopeState: resultsScopeState,
+        selectedCategories,
+        selectedLocation,
+        selectedSearch,
+        selectedAspectFilters,
+        focusedPubkey,
+        userPubkey,
+        locale: siteLanguage,
+      }),
+    [
+      productEvents,
+      registry,
+      selectedCategories,
+      selectedLocation,
+      selectedSearch,
+      selectedAspectFilters,
+      focusedPubkey,
+      userPubkey,
+      siteLanguage,
+      selectedContextRef,
+      selectedThingRef,
+      shouldShowListings,
+      selectedScopeValuesKey,
+      autoActiveRequiredRefsKey,
+    ]
+  );
+  const actualFacetFilters = marketplaceResults.actualFacetFilters;
+  const selectedFacetChips = marketplaceResults.selectedFacetChips;
+  const baseScopeResultCount = marketplaceResults.baseScopeResultCount;
+  const filteredResultCount = marketplaceResults.filteredResultCount;
+  const scopeNavigationSections =
+    registry && isListingResultPage
+      ? buildMarketplaceNavSections({
+          mode: selectedContextRef || selectedThingRef ? "localScope" : "root",
+          registry,
+          scopeState,
+          locale: siteLanguage,
+        })
+      : [];
+  const quickFilterLimit = 8;
+  const rootNavSections = useMemo(() => {
+    if (!registry || !isMarketplaceBrowseHome) return [];
+    return buildMarketplaceNavSections({
+      mode: "root",
+      registry,
+      locale: siteLanguage,
+    });
+  }, [isMarketplaceBrowseHome, registry, siteLanguage]);
+  const recentMarketplaceProducts = useMemo(
+    () =>
+      productEvents
+        .filter(
+          (product) =>
+            product.currency &&
+            product.images.length > 0 &&
+            !product.contentWarning
+        )
+        .slice(0, 8),
+    [productEvents]
+  );
 
   const searchRelaysKey = Array.from(
     new Set([
@@ -88,6 +241,23 @@ const DisplayProducts = ({
   )
     .filter(Boolean)
     .join("|");
+
+  useEffect(() => {
+    if (!router.isReady || !registry || !showTaxonostrMarketplaceChrome) return;
+    const normalized = normalizeMarketplaceUrlQuery({
+      pathname: "/marketplace",
+      query: router.query,
+      registry,
+    });
+    if (!normalized.changed) return;
+    router.replace(normalized.href, undefined, { shallow: true });
+  }, [
+    registry,
+    router,
+    router.isReady,
+    router.query,
+    showTaxonostrMarketplaceChrome,
+  ]);
 
   // Load saved page from session storage on mount
   useEffect(() => {
@@ -107,9 +277,24 @@ const DisplayProducts = ({
   }, [focusedPubkey]);
 
   useEffect(() => {
+    setSelectedAspectFilters({});
+    setShowAllFilters(false);
+    setOpenFilterRef("");
+    setCurrentPage(1);
+    if (typeof window !== "undefined" && process.env.NODE_ENV !== "test") {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [router.asPath]);
+
+  useEffect(() => {
     const normalizedSearch = selectedSearch.trim();
 
-    if (!normalizedSearch || isNip19SearchQuery(normalizedSearch) || !nostr) {
+    if (
+      !normalizedSearch ||
+      isNip19SearchQuery(normalizedSearch) ||
+      !nostr ||
+      typeof nostr.fetch !== "function"
+    ) {
       setNip50ProductEvents([]);
       setIsNip50SearchLoading(false);
       return;
@@ -206,7 +391,7 @@ const DisplayProducts = ({
     if (focusedPubkey && setCategories) {
       const productCategories: string[] = [];
       productEvents.forEach((event) => {
-        if (event.pubkey === focusedPubkey) {
+        if (event.pubkey === focusedPubkey && !event.taxonomy) {
           productCategories.push(...event.categories);
         }
       });
@@ -217,28 +402,7 @@ const DisplayProducts = ({
   useEffect(() => {
     if (!productEvents || !isInitialized) return;
 
-    const filtered = productEvents.filter((product) => {
-      if (focusedPubkey && product.pubkey !== focusedPubkey) return false;
-      if (
-        !productSatisfiesAllFilters(product, {
-          selectedCategories,
-          selectedLocation,
-          selectedSearch,
-        })
-      )
-        return false;
-      if (!product.currency) return false;
-      if (product.images.length === 0) return false;
-      if (product.contentWarning) return false;
-      if (
-        product.pubkey ===
-          "3da2082b7aa5b76a8f0c134deab3f7848c3b5e3a3079c65947d88422b69c1755" &&
-        userPubkey !== product.pubkey
-      ) {
-        return false;
-      }
-      return true;
-    });
+    const filtered = marketplaceResults.filteredProducts;
 
     setFilteredProducts(filtered);
     const newTotalPages = Math.max(
@@ -250,7 +414,9 @@ const DisplayProducts = ({
     // Check if filter actually changed (not just from initialization)
     const prevFiltersRef = `${selectedSearch}-${selectedLocation}-${Array.from(
       selectedCategories
-    ).join(",")}`;
+    ).join(
+      ","
+    )}-${selectedContextRef}-${selectedThingRef}-${Object.values(selectedAspectFilters).join(",")}`;
     const currentFiltersRef = sessionStorage.getItem("last-filters-ref");
 
     if (currentFiltersRef && currentFiltersRef !== prevFiltersRef) {
@@ -272,9 +438,14 @@ const DisplayProducts = ({
     onFilteredProductsChange?.(filtered);
   }, [
     productEvents,
+    marketplaceResults,
     selectedSearch,
     selectedLocation,
     selectedCategories,
+    selectedContextRef,
+    selectedThingRef,
+    shouldShowListings,
+    selectedAspectFilters,
     focusedPubkey,
     isInitialized,
   ]);
@@ -348,11 +519,10 @@ const DisplayProducts = ({
       }
     }
 
-    const allParsed = productEvents.filter(
-      (productData) =>
-        productData.d !== "zapsnag" &&
-        !productData.categories?.includes("zapsnag")
-    );
+    const allParsed = productEventContext.productEvents
+      .filter((e: NostrEvent) => e.kind !== 1)
+      .map((e: NostrEvent) => parseTags(e))
+      .filter((p: ProductData | undefined): p is ProductData => !!p);
 
     const slug = getListingSlug(product, allParsed);
     if (slug) {
@@ -381,6 +551,210 @@ const DisplayProducts = ({
 
     return filteredProducts.slice(startIndex, endIndex);
   };
+  const currentPageProducts = getCurrentPageProducts();
+
+  const contextPathRefs =
+    registry && selectedContextRef
+      ? (registry.ancestryByRef[selectedContextRef] || [selectedContextRef])
+          .map(normalizeTaxonomyRef)
+          .filter(
+            (ref) =>
+              ref.startsWith("val:context:") &&
+              ref !== "val:context" &&
+              ref !== "val:context:segment"
+          )
+      : [];
+  const thingPathRefs =
+    registry && selectedThingRef
+      ? (registry.ancestryByRef[selectedThingRef] || [selectedThingRef])
+          .map(normalizeTaxonomyRef)
+          .filter(
+            (ref) =>
+              ref.startsWith("thing:") &&
+              ref !== "thing" &&
+              ref !== "thing:artifact"
+          )
+      : [];
+  const breadcrumbRefs = [...contextPathRefs, ...thingPathRefs];
+  const marketplaceNavHref = (
+    item: MarketplaceNavItem,
+    listingsIntent = isListingResultPage
+  ) =>
+    getMarketplaceNavHref({
+      registry,
+      currentScopeState: scopeState,
+      item,
+      listingsIntent,
+    });
+
+  const marketplaceFacetHref = (
+    selectedValuesByProp: Record<string, string[]>
+  ) =>
+    buildMarketplaceNavigationHref({
+      registry,
+      currentScopeState: scopeState,
+      targetThingRef: selectedThingRef,
+      targetContextRef: selectedContextRef,
+      selectedValuesByProp,
+      listingsIntent: true,
+    });
+
+  const removeSelectedFacetHref = (propRef: string, valueRef: string) => {
+    const nextSelectedValuesByProp: Record<string, string[]> =
+      Object.fromEntries(
+        Object.entries(selectedScopeValuesByProp).flatMap(
+          ([currentPropRef, currentValueRefs]) => {
+            if (currentPropRef !== propRef)
+              return [[currentPropRef, currentValueRefs]];
+            const nextValueRefs = currentValueRefs.filter(
+              (currentValueRef) => currentValueRef !== valueRef
+            );
+            return nextValueRefs.length > 0
+              ? [[currentPropRef, nextValueRefs]]
+              : [];
+          }
+        )
+      );
+    return marketplaceFacetHref(nextSelectedValuesByProp);
+  };
+
+  const removeLiteralFilter = (propRef: string) => {
+    setSelectedAspectFilters((current) => {
+      const next = { ...current };
+      delete next[propRef];
+      return next;
+    });
+  };
+
+  const selectedFilterValues = (propRef: string) => {
+    const selectedScopeValues = selectedScopeValuesByProp[propRef] || [];
+    if (selectedScopeValues.length > 0) return selectedScopeValues;
+    const selectedLiteralValue = selectedAspectFilters[propRef];
+    return selectedLiteralValue ? [selectedLiteralValue] : [];
+  };
+
+  const handleFacetFilterChange = (propRef: string, value: string) => {
+    const normalizedValue = normalizeTaxonomyRef(value);
+    const isTaxonomyRefValue = Boolean(
+      value && registry?.nodeByRef[normalizedValue]
+    );
+    if (isTaxonomyRefValue || selectedScopeValuesByProp[propRef]?.length) {
+      const nextSelectedValuesByProp = { ...selectedScopeValuesByProp };
+      if (isTaxonomyRefValue) {
+        nextSelectedValuesByProp[propRef] = Array.from(
+          new Set([
+            ...(nextSelectedValuesByProp[propRef] || []),
+            normalizedValue,
+          ])
+        );
+      } else {
+        delete nextSelectedValuesByProp[propRef];
+      }
+      setOpenFilterRef("");
+      router.push(marketplaceFacetHref(nextSelectedValuesByProp), undefined, {
+        shallow: true,
+      });
+      return;
+    }
+
+    setOpenFilterRef("");
+    setSelectedAspectFilters((current) => ({
+      ...current,
+      [propRef]: value,
+    }));
+  };
+
+  const selectedLiteralFacetChips: MarketplaceLiteralFacetChip[] =
+    actualFacetFilters.flatMap((filter) => {
+      const value = selectedAspectFilters[filter.propRef];
+      if (!value) return [];
+      const valueLabel =
+        filter.values.find(([candidate]) => candidate === value)?.[1] || value;
+      return [
+        {
+          propRef: filter.propRef,
+          label: filter.label,
+          value,
+          valueLabel,
+        },
+      ];
+    });
+
+  const renderFilterBar = () => {
+    if (!isListingResultPage) return null;
+    return (
+      <MarketplaceFilterBar
+        filters={actualFacetFilters}
+        quickFilterLimit={quickFilterLimit}
+        selectedFacetChips={selectedFacetChips}
+        selectedLiteralFacetChips={selectedLiteralFacetChips}
+        filteredResultCount={filteredResultCount}
+        baseScopeResultCount={baseScopeResultCount}
+        openFilterRef={openFilterRef}
+        showAllFilters={showAllFilters}
+        selectedFilterValues={selectedFilterValues}
+        onOpenFilterChange={setOpenFilterRef}
+        onShowAllFiltersChange={setShowAllFilters}
+        onSelectFilterValue={handleFacetFilterChange}
+        onRemoveFacet={(propRef, valueRef) =>
+          router.push(removeSelectedFacetHref(propRef, valueRef), undefined, {
+            shallow: true,
+          })
+        }
+        onRemoveLiteralFacet={removeLiteralFilter}
+      />
+    );
+  };
+
+  const toBrowseTileItem = (item: MarketplaceNavItem) => ({
+    ref: item.ref,
+    label: item.label,
+    image: registry ? getNodeImage(registry, item.ref) : undefined,
+    tileImages: registry
+      ? getTaxonomyTileImages(registry, item.ref, {
+          selectedValuesByProp: selectedScopeValuesByProp,
+        })
+      : undefined,
+    onClick: () =>
+      router.push(marketplaceNavHref(item, false), undefined, {
+        shallow: true,
+      }),
+  });
+
+  const navSectionsToBrowseSections = (
+    sections: MarketplaceNavSection[]
+  ): MarketplaceBrowseSection[] =>
+    sections.map((section) => ({
+      key: section.id,
+      title: section.label,
+      items: section.items.map(toBrowseTileItem),
+    }));
+
+  const scopedBrowseNavSections =
+    registry && !isMarketplaceBrowseHome && !isListingResultPage
+      ? buildMarketplaceBrowseNavSections(registry, scopeState, siteLanguage)
+      : [];
+  const scopedBrowseSections = navSectionsToBrowseSections(
+    scopedBrowseNavSections
+  );
+
+  const marketplaceHomeBrowseSections: MarketplaceBrowseSection[] =
+    rootNavSections.map((section) => ({
+      key: section.id,
+      title: section.label,
+      items: section.items.map((item) => ({
+        ref: item.ref,
+        label: item.label,
+        image: registry ? getNodeImage(registry, item.ref) : undefined,
+        tileImages: registry
+          ? getTaxonomyTileImages(registry, item.ref, siteLanguage)
+          : undefined,
+        href: buildMarketplaceHref({
+          contextRef: item.kind === "context" ? item.ref : undefined,
+          thingRef: item.kind === "thing" ? item.ref : undefined,
+        }),
+      })),
+    }));
 
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
@@ -393,65 +767,157 @@ const DisplayProducts = ({
     }
   };
 
+  const sidebarHref = (item: MarketplaceNavItem) => {
+    return marketplaceNavHref(item, isListingResultPage);
+  };
+
+  const renderScopeNavigationSidebar = () => {
+    if (!registry || !isListingResultPage) return null;
+    return (
+      <MarketplaceScopeSidebar
+        sections={scopeNavigationSections}
+        getHref={sidebarHref}
+        onNavigate={(href) => router.push(href, undefined, { shallow: true })}
+      />
+    );
+  };
+
+  const renderListingResults = () => (
+    <MarketplaceListingsPanel
+      products={currentPageProducts}
+      totalPages={totalPages}
+      currentPage={currentPage}
+      isProductsLoading={isProductsLoading}
+      shouldShowListings={shouldShowListings}
+      wotFilter={wotFilter}
+      baseScopeResultCount={baseScopeResultCount}
+      getProductHref={getProductHref}
+      onPageChange={handlePageChange}
+      onProductClick={onProductClick}
+      filterBar={renderFilterBar()}
+    />
+  );
+
   return (
     <>
-      <div className="w-full md:pl-4">
-        {!isMyListings && (isProductsLoading || isNip50SearchLoading) ? (
+      <div className="bg-light-bg dark:bg-dark-bg w-full px-4 md:pl-4">
+        {showTaxonostrMarketplaceChrome &&
+          registry &&
+          (selectedContextRef || selectedThingRef || isListingResultPage) && (
+            <div className="border-default-200/70 dark:border-default-700/70 mb-6 rounded-xl border bg-white/80 px-6 py-6 shadow-sm dark:bg-neutral-900/70">
+              <div
+                className={`flex flex-wrap items-start gap-4 ${isListingResultPage ? "justify-between" : "justify-start text-left"}`}
+              >
+                <div>
+                  <div
+                    className={`text-default-500 mb-2 flex flex-wrap items-center gap-2 text-xs ${isListingResultPage ? "" : "justify-start"}`}
+                  >
+                    <MarketplaceBreadcrumbs
+                      refs={breadcrumbRefs}
+                      rootLabel="Marketplace"
+                      rootHref="/marketplace"
+                      getLabel={(ref) =>
+                        getTaxonomyDisplayLabel(
+                          registry,
+                          ref,
+                          siteLanguage,
+                          "breadcrumb"
+                        )
+                      }
+                      getHref={(ref) =>
+                        marketplaceNavHref(
+                          {
+                            kind: ref.startsWith("thing:")
+                              ? "thing"
+                              : "context",
+                            ref,
+                            label: "",
+                            depth: 0,
+                            isCurrent: false,
+                          },
+                          false
+                        )
+                      }
+                      onNavigate={(href) =>
+                        router.push(href, undefined, { shallow: true })
+                      }
+                    />
+                  </div>
+                  <h1 className="text-light-text dark:text-dark-text text-2xl font-semibold">
+                    {selectedThingRef && selectedThingNode
+                      ? getTaxonomyDisplayLabel(
+                          registry,
+                          selectedThingRef,
+                          siteLanguage,
+                          "category"
+                        )
+                      : selectedContextRef && selectedContextNode
+                        ? getTaxonomyDisplayLabel(
+                            registry,
+                            selectedContextRef,
+                            siteLanguage,
+                            "category"
+                          )
+                        : "Marketplace"}
+                  </h1>
+                </div>
+                <div className="flex flex-wrap items-end justify-center gap-3"></div>
+              </div>
+              {!isListingResultPage && (
+                <MarketplaceBrowseSections sections={scopedBrowseSections} />
+              )}
+            </div>
+          )}
+        {registry && isMarketplaceBrowseHome && rootNavSections.length > 0 && (
+          <div className="border-default-200/70 dark:border-default-700/70 mb-8 rounded-xl border bg-white/80 px-6 py-6 shadow-sm dark:bg-neutral-900/70">
+            <h1 className="text-light-text dark:text-dark-text mb-6 text-2xl font-semibold">
+              Marketplace
+            </h1>
+            <div className="space-y-8">
+              <MarketplaceBrowseSections
+                sections={marketplaceHomeBrowseSections}
+              />
+            </div>
+          </div>
+        )}
+        {!isMyListings &&
+        (profileMapContext.isLoading ||
+          productEventContext.isLoading ||
+          isProductsLoading ||
+          isNip50SearchLoading) ? (
           <div className="mt-6 mb-6 flex items-center justify-center">
             <ShopstrSpinner />
           </div>
         ) : null}
-        {filteredProducts.length > 0 && (
-          <>
-            <div className="grid max-w-full grid-cols-[repeat(auto-fill,minmax(280px,1fr))] justify-items-stretch gap-4 overflow-x-hidden">
-              {getCurrentPageProducts().map(
-                (productData: ProductData, index) => (
-                  <ProductCard
-                    key={productData.id + "-" + index}
-                    productData={productData}
-                    onProductClick={onProductClick}
-                    href={getProductHref(productData)}
-                  />
-                )
-              )}
+        {isMarketplaceBrowseHome && recentMarketplaceProducts.length > 0 && (
+          <section className="mb-8">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-light-text dark:text-dark-text text-2xl font-semibold">
+                Recently listed items
+              </h2>
             </div>
-
-            {totalPages > 1 && (
-              <div className="mt-4 flex justify-center">
-                <Pagination
-                  total={totalPages}
-                  page={currentPage}
-                  onChange={handlePageChange}
-                  showControls
-                  classNames={{
-                    cursor: "bg-purple-500",
-                  }}
-                />
-              </div>
-            )}
-
-            <div className="text-light-text dark:text-dark-text mt-2 mb-6 text-center text-xs">
-              Showing {(currentPage - 1) * itemsPerPage + 1} to{" "}
-              {Math.min(filteredProducts.length, currentPage * itemsPerPage)} of{" "}
-              {filteredProducts.length} products
-            </div>
-          </>
+            <MarketplaceListingsPanel
+              products={recentMarketplaceProducts}
+              totalPages={1}
+              currentPage={1}
+              isProductsLoading={isProductsLoading}
+              shouldShowListings={false}
+              wotFilter={wotFilter}
+              baseScopeResultCount={recentMarketplaceProducts.length}
+              getProductHref={getProductHref}
+              onPageChange={handlePageChange}
+              onProductClick={onProductClick}
+            />
+          </section>
         )}
-        {!isMyListings &&
-          !isProductsLoading &&
-          !isNip50SearchLoading &&
-          filteredProducts.length === 0 && (
-            <div className="mt-20 flex flex-grow items-center justify-center py-10">
-              <div className="bg-light-fg dark:bg-dark-fg w-full max-w-lg rounded-lg p-8 text-center shadow-lg">
-                <p className="text-light-text dark:text-dark-text text-3xl font-semibold">
-                  No products found...
-                </p>
-                <p className="text-light-text dark:text-dark-text mt-4 text-lg">
-                  Try changing your search or clearing some filters.
-                </p>
-              </div>
-            </div>
-          )}
+        {isListingResultPage ? (
+          <div className="flex items-start gap-6">
+            {renderScopeNavigationSidebar()}
+            <div className="min-w-0 flex-1">{renderListingResults()}</div>
+          </div>
+        ) : (
+          renderListingResults()
+        )}
         {isMyListings &&
           !isProductsLoading &&
           !productEvents.some((product) => product.pubkey === userPubkey) && (
