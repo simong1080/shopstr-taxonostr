@@ -190,10 +190,12 @@ describe("ShopProfileForm", () => {
     renderWithProviders(<ShopProfileForm />);
 
     const shopNameInput = await screen.findByLabelText("Shop Name");
-    await user.type(
-      shopNameInput,
-      "This is a very long shop name that is definitely over fifty characters long for sure."
-    );
+    fireEvent.change(shopNameInput, {
+      target: {
+        value:
+          "This is a very long shop name that is definitely over fifty characters long for sure.",
+      },
+    });
     await user.click(screen.getByRole("button", { name: /Save Shop/i }));
 
     expect(
