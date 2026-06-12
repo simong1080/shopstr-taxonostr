@@ -93,6 +93,17 @@ function getNip50SearchRelays(relays: string[]): string[] {
   return [...selectedSearchRelays, ...backupSearchRelays];
 }
 
+function parseJsonObject(content: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(content);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getProductEventKey(event: NostrEvent): string {
   if (event.kind === 30402) {
     const dTag = event.tags?.find((tag: string[]) => tag[0] === "d")?.[1];
@@ -617,20 +628,20 @@ export const fetchShopProfile = async (
             });
 
             latestEventsMap.forEach((event, pubkey) => {
-              try {
-                const shopProfileSetting = {
-                  pubkey: event.pubkey,
-                  content: JSON.parse(event.content),
-                  created_at: event.created_at,
-                  event: event,
-                };
-                shopProfile.set(pubkey, shopProfileSetting);
-              } catch (error) {
-                console.error(
-                  `Failed to parse shop profile from DB for pubkey: ${pubkey}`,
-                  error
+              const content = parseJsonObject(event.content);
+              if (!content) {
+                console.warn(
+                  `Skipping malformed shop profile from DB for pubkey: ${pubkey}`
                 );
+                return;
               }
+              const shopProfileSetting = {
+                pubkey: event.pubkey,
+                content,
+                created_at: event.created_at,
+                event: event,
+              };
+              shopProfile.set(pubkey, shopProfileSetting);
             });
 
             if (shopProfile.size > 0) {
@@ -660,20 +671,20 @@ export const fetchShopProfile = async (
         });
 
         latestEventsMap.forEach((event, pubkey) => {
-          try {
-            const shopProfileSetting = {
-              pubkey: event.pubkey,
-              content: JSON.parse(event.content),
-              created_at: event.created_at,
-              event: event,
-            };
-            shopProfile.set(pubkey, shopProfileSetting);
-          } catch (error) {
-            console.error(
-              `Failed to parse shop profile for pubkey: ${pubkey}`,
-              error
+          const content = parseJsonObject(event.content);
+          if (!content) {
+            console.warn(
+              `Skipping malformed shop profile for pubkey: ${pubkey}`
             );
+            return;
           }
+          const shopProfileSetting = {
+            pubkey: event.pubkey,
+            content,
+            created_at: event.created_at,
+            event: event,
+          };
+          shopProfile.set(pubkey, shopProfileSetting);
         });
 
         editShopContext(shopProfile, false);

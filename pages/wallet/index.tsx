@@ -14,6 +14,33 @@ import {
 } from "@cashu/cashu-ts";
 import ProtectedRoute from "@/components/utility-components/protected-route";
 
+function proofAmountToNumber(amount: unknown): number {
+  if (typeof amount === "number") return Number.isFinite(amount) ? amount : 0;
+  if (typeof amount === "string") {
+    const parsed = Number(amount);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof amount === "bigint") return Number(amount);
+  if (
+    amount &&
+    typeof amount === "object" &&
+    "toNumber" in amount &&
+    typeof amount.toNumber === "function"
+  ) {
+    const legacyAmount = amount as { toNumber: () => unknown };
+    const parsed = legacyAmount.toNumber();
+    return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function sumProofAmounts(proofs: Proof[]): number {
+  return proofs.reduce(
+    (acc, proof) => acc + proofAmountToNumber(proof.amount),
+    0
+  );
+}
+
 const Wallet = () => {
   const [totalBalance, setTotalBalance] = useState(0);
   const [walletBalance, setWalletBalance] = useState(0);
@@ -26,22 +53,62 @@ const Wallet = () => {
   const { mints, tokens } = localStorageData;
 
   useEffect(() => {
-    const currentMint = new CashuMint(mints[0]!);
-    setMint(mints[0]!);
-    const cashuWallet = new CashuWallet(currentMint);
-    setWallet(cashuWallet);
+    let cancelled = false;
+    const loadWallet = async () => {
+      const mintUrl = mints[0];
+      if (!mintUrl) {
+        setMint("");
+        setWallet(undefined);
+        setMintKeySetIds([]);
+        return;
+      }
+
+      setMint(mintUrl);
+      const nextWallet = new CashuWallet(new CashuMint(mintUrl));
+      try {
+        await nextWallet.loadMint();
+        if (!cancelled) {
+          setWallet(nextWallet);
+        }
+      } catch (error) {
+        console.warn("Failed to initialize Cashu wallet", error);
+        if (!cancelled) {
+          setWallet(undefined);
+          setMintKeySetIds([]);
+        }
+      }
+    };
+    loadWallet();
+    return () => {
+      cancelled = true;
+    };
   }, [mints]);
 
   useEffect(() => {
+    let cancelled = false;
     const fetchLocalKeySet = async () => {
       if (wallet) {
-        const mintKeySetIdsArray = await wallet.keyChain.getKeysets();
-        if (mintKeySetIdsArray) {
-          setMintKeySetIds(mintKeySetIdsArray);
+        try {
+          const mintKeySetIdsArray = await wallet.keyChain.getKeysets();
+          if (!cancelled) {
+            setMintKeySetIds(mintKeySetIdsArray ?? []);
+          }
+        } catch (error) {
+          console.warn("Wallet keychain is not initialized yet", error);
+          if (!cancelled) {
+            setMintKeySetIds([]);
+          }
+        }
+      } else {
+        if (!cancelled) {
+          setMintKeySetIds([]);
         }
       }
     };
     fetchLocalKeySet();
+    return () => {
+      cancelled = true;
+    };
   }, [wallet]);
 
   const filteredProofs = useMemo(() => {
@@ -55,20 +122,12 @@ const Wallet = () => {
 
   useEffect(() => {
     if (tokens) {
-      const tokensTotal =
-        tokens.length >= 1
-          ? tokens.reduce(
-              (acc, token: Proof) => acc + token.amount.toNumber(),
-              0
-            )
-          : 0;
+      const tokensTotal = tokens.length >= 1 ? sumProofAmounts(tokens) : 0;
       setTotalBalance(tokensTotal);
     }
 
     const walletTotal =
-      filteredProofs.length >= 1
-        ? filteredProofs.reduce((acc, p: Proof) => acc + p.amount.toNumber(), 0)
-        : 0;
+      filteredProofs.length >= 1 ? sumProofAmounts(filteredProofs) : 0;
     setWalletBalance(walletTotal);
   }, [tokens, filteredProofs]);
 
@@ -77,12 +136,7 @@ const Wallet = () => {
       const { tokens: newTokens } = getLocalStorageData();
       if (newTokens) {
         const tokensTotal =
-          newTokens.length >= 1
-            ? newTokens.reduce(
-                (acc: number, token: Proof) => acc + token.amount.toNumber(),
-                0
-              )
-            : 0;
+          newTokens.length >= 1 ? sumProofAmounts(newTokens) : 0;
         setTotalBalance(tokensTotal);
 
         if (mintKeySetIds) {
@@ -91,10 +145,7 @@ const Wallet = () => {
           );
           const newWalletTotal =
             newFilteredProofs.length >= 1
-              ? newFilteredProofs.reduce(
-                  (acc: number, p: Proof) => acc + p.amount.toNumber(),
-                  0
-                )
+              ? sumProofAmounts(newFilteredProofs)
               : 0;
           setWalletBalance(newWalletTotal);
         }

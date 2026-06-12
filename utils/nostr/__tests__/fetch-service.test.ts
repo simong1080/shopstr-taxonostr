@@ -2982,8 +2982,8 @@ describe("fetchShopProfile", () => {
       fetch: jest.fn().mockResolvedValue([malformedRelayEvent]),
     } as any;
     const editShopContext = jest.fn();
-    const consoleErrorSpy = jest
-      .spyOn(console, "error")
+    const consoleWarnSpy = jest
+      .spyOn(console, "warn")
       .mockImplementation(() => {});
 
     const { shopProfileMap } = await fetchShopProfile(
@@ -2993,11 +2993,75 @@ describe("fetchShopProfile", () => {
       editShopContext
     );
 
-    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleWarnSpy).toHaveBeenCalled();
     expect(shopProfileMap.get(pubkey1)).toBeFalsy();
     expect(shopProfileMap.get(pubkey2)).toBeFalsy();
 
-    consoleErrorSpy.mockRestore();
+    consoleWarnSpy.mockRestore();
+  });
+
+  it("ignores JSON array and primitive shop profile content while accepting valid objects", async () => {
+    const cacheEventsToDatabase = jest.fn().mockResolvedValue(undefined);
+    jest.doMock("@/utils/db/db-client", () => ({ cacheEventsToDatabase }));
+
+    const { fetchShopProfile } = await import("../fetch-service");
+
+    const arrayPubkey = "seller-shop-array";
+    const primitivePubkey = "seller-shop-primitive";
+    const validPubkey = "seller-shop-valid-object";
+
+    const arrayDbEvent = makeShopEvent({
+      id: "shop-array-db",
+      pubkey: arrayPubkey,
+      created_at: 100,
+      content: JSON.stringify([{ name: "Array Shop" }]),
+      sig: "sig-shop-array-db",
+    });
+    const primitiveRelayEvent = makeShopEvent({
+      id: "shop-primitive-relay",
+      pubkey: primitivePubkey,
+      created_at: 200,
+      content: "42",
+      sig: "sig-shop-primitive-relay",
+    });
+    const validRelayEvent = makeShopEvent({
+      id: "shop-valid-object-relay",
+      pubkey: validPubkey,
+      created_at: 300,
+      content: JSON.stringify({ name: "Valid Object Shop" }),
+      sig: "sig-shop-valid-object-relay",
+    });
+
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(makeDbPayload([arrayDbEvent])) as typeof global.fetch;
+
+    const nostr = {
+      fetch: jest
+        .fn()
+        .mockResolvedValue([primitiveRelayEvent, validRelayEvent]),
+    } as any;
+    const editShopContext = jest.fn();
+    const consoleWarnSpy = jest
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
+
+    const { shopProfileMap } = await fetchShopProfile(
+      nostr,
+      ["wss://relay.example"],
+      [arrayPubkey, primitivePubkey, validPubkey],
+      editShopContext
+    );
+
+    expect(consoleWarnSpy).toHaveBeenCalledTimes(2);
+    expect(shopProfileMap.get(arrayPubkey)).toBeFalsy();
+    expect(shopProfileMap.get(primitivePubkey)).toBeFalsy();
+    expect(shopProfileMap.get(validPubkey)).toMatchObject({
+      pubkey: validPubkey,
+      content: { name: "Valid Object Shop" },
+    });
+
+    consoleWarnSpy.mockRestore();
   });
 
   it("maps multiple pubkeys independently without cross-contamination", async () => {
