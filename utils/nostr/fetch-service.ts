@@ -385,6 +385,44 @@ export function getReportTargetIdentifiers(event: NostrEvent): {
   return { referencedPubkeys, referencedEventIds };
 }
 
+const REPORT_DB_QUERY_BATCH_SIZE = 75;
+
+function chunkValues<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function buildReportDbQueryParams(
+  productIds: string[],
+  profilePubkeys: string[]
+): URLSearchParams[] {
+  if (
+    productIds.length <= REPORT_DB_QUERY_BATCH_SIZE &&
+    profilePubkeys.length <= REPORT_DB_QUERY_BATCH_SIZE
+  ) {
+    const params = new URLSearchParams();
+    profilePubkeys.forEach((pubkey) => params.append("p", pubkey));
+    productIds.forEach((productId) => params.append("e", productId));
+    return [params];
+  }
+
+  return [
+    ...chunkValues(profilePubkeys, REPORT_DB_QUERY_BATCH_SIZE).map((chunk) => {
+      const params = new URLSearchParams();
+      chunk.forEach((pubkey) => params.append("p", pubkey));
+      return params;
+    }),
+    ...chunkValues(productIds, REPORT_DB_QUERY_BATCH_SIZE).map((chunk) => {
+      const params = new URLSearchParams();
+      chunk.forEach((productId) => params.append("e", productId));
+      return params;
+    }),
+  ];
+}
+
 export const fetchReports = async (
   nostr: NostrManager,
   relays: string[],
@@ -426,31 +464,32 @@ export const fetchReports = async (
       };
 
       try {
-        const params = new URLSearchParams();
-        Array.from(sellerPubkeys).forEach((pubkey) =>
-          params.append("p", pubkey)
+        const queryParamSets = buildReportDbQueryParams(
+          Array.from(productIds),
+          Array.from(sellerPubkeys)
         );
-        Array.from(productIds).forEach((productId) =>
-          params.append("e", productId)
-        );
-        const response = await fetch(
-          `/api/db/fetch-reports?${params.toString()}`
-        );
-        if (response.ok) {
+        for (const params of queryParamSets) {
+          const response = await fetch(
+            `/api/db/fetch-reports?${params.toString()}`
+          );
+          if (!response.ok) continue;
           const reportsFromDb: NostrEvent[] = await response.json();
           reportsFromDb.forEach(upsertReportEvent);
+        }
 
-          if (reportEventsMap.size > 0) {
-            editReportsContext(
-              Array.from(reportEventsMap.values()).sort(
-                (a, b) => b.created_at - a.created_at
-              ),
-              false
-            );
-          }
+        if (reportEventsMap.size > 0) {
+          editReportsContext(
+            Array.from(reportEventsMap.values()).sort(
+              (a, b) => b.created_at - a.created_at
+            ),
+            false
+          );
         }
       } catch (error) {
-        console.error("Failed to fetch reports from database: ", error);
+        console.warn(
+          "Skipping DB reports fetch; continuing with relays",
+          error
+        );
       }
 
       const reportFilters: Filter[] = [];

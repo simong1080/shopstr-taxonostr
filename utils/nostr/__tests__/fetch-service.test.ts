@@ -1088,6 +1088,45 @@ describe("fetchReports", () => {
     expect(reportEvents.map((e) => e.id)).not.toContain("report-irrelevant");
   });
 
+  it("chunks DB report lookups so large product sets do not create one oversized URL", async () => {
+    const cacheEventsToDatabase = jest.fn().mockResolvedValue(undefined);
+    jest.doMock("@/utils/db/db-client", () => ({ cacheEventsToDatabase }));
+
+    const { fetchReports } = await import("../fetch-service");
+
+    const products = Array.from({ length: 160 }, (_, index) =>
+      makeProductEvent({
+        id: `listing-${index}`,
+        pubkey: `seller-${index}`,
+        created_at: index,
+        tags: [["d", `item-${index}`]],
+        sig: `sig-product-${index}`,
+      })
+    );
+
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(makeDbPayload([])) as typeof global.fetch;
+
+    const nostr = { fetch: jest.fn().mockResolvedValue([]) } as any;
+    const editReportsContext = jest.fn();
+
+    await fetchReports(
+      nostr,
+      ["wss://relay.example"],
+      products as any,
+      editReportsContext
+    );
+
+    expect(global.fetch).toHaveBeenCalledTimes(6);
+    for (const [url] of (global.fetch as jest.Mock).mock.calls) {
+      const parsed = new URL(url as string, "http://localhost");
+      expect(parsed.searchParams.getAll("p").length).toBeLessThanOrEqual(75);
+      expect(parsed.searchParams.getAll("e").length).toBeLessThanOrEqual(75);
+    }
+    expect(nostr.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("discards DB report rows that reference neither loaded product IDs nor seller pubkeys", async () => {
     const cacheEventsToDatabase = jest.fn().mockResolvedValue(undefined);
     jest.doMock("@/utils/db/db-client", () => ({ cacheEventsToDatabase }));
@@ -1452,7 +1491,7 @@ describe("fetchReports", () => {
     expect(cacheEventsToDatabase).toHaveBeenCalledWith([validReport]);
   });
 
-  it("catches and logs a DB fetch throw and still queries the relay", async () => {
+  it("catches and warns about a DB fetch throw and still queries the relay", async () => {
     const cacheEventsToDatabase = jest.fn().mockResolvedValue(undefined);
     jest.doMock("@/utils/db/db-client", () => ({ cacheEventsToDatabase }));
 
@@ -1480,8 +1519,8 @@ describe("fetchReports", () => {
       fetch: jest.fn().mockResolvedValue([relayReport]),
     } as any;
     const editReportsContext = jest.fn();
-    const consoleErrorSpy = jest
-      .spyOn(console, "error")
+    const consoleWarnSpy = jest
+      .spyOn(console, "warn")
       .mockImplementation(() => {});
 
     const { reportEvents } = await fetchReports(
@@ -1491,14 +1530,14 @@ describe("fetchReports", () => {
       editReportsContext
     );
 
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      "Failed to fetch reports from database: ",
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "Skipping DB reports fetch; continuing with relays",
       dbError
     );
     expect(nostr.fetch).toHaveBeenCalledTimes(1);
     expect(reportEvents.map((e) => e.id)).toContain("relay-report-db-throw");
 
-    consoleErrorSpy.mockRestore();
+    consoleWarnSpy.mockRestore();
   });
 
   it("skips DB reports when response.ok is false and still queries the relay", async () => {
