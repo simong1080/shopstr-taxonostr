@@ -214,7 +214,10 @@ export const fetchAllPostsAbortable = async (
         console.error("No products found with filter: ", filter);
       }
 
-      const validProductEvents = fetchedEvents.filter(isValidProductRelayEvent);
+      const validProductEvents = fetchedEvents.filter(
+        (event): event is NostrEvent =>
+          isValidProductRelayEvent(event) && event.kind === 30402
+      );
       if (validProductEvents.length > 0) {
         cacheEventsToDatabase(validProductEvents).catch((error) =>
           console.error("Failed to cache products to database:", error)

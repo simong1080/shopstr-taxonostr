@@ -121,6 +121,27 @@ describe("/api/db/cache-event", () => {
     });
   });
 
+  it("accepts wallet state events supported by the wallet cache table", async () => {
+    verifyEventMock.mockReturnValue(true);
+    cacheEventsMock.mockResolvedValue(undefined);
+
+    const walletStateEvent = {
+      id: "evt-wallet-state",
+      pubkey: "wallet-pubkey",
+      kind: 37375,
+      content: "{}",
+    };
+    const req = createRequest("POST", [walletStateEvent]);
+    const res = createResponse();
+
+    await cacheEventsHandler(req, res as unknown as NextApiResponse);
+
+    expect(verifyEventMock).toHaveBeenCalledWith(walletStateEvent);
+    expect(cacheEventsMock).toHaveBeenCalledWith([walletStateEvent]);
+    expect(res.statusCode).toBe(200);
+    expect(res.jsonBody).toEqual({ success: true });
+  });
+
   it("throttles per pubkey, not per IP, so NAT-shared buyers don't trip each other", async () => {
     verifyEventMock.mockReturnValue(true);
     cacheEventMock.mockResolvedValue(undefined);

@@ -133,7 +133,7 @@ describe("fetchAllPostsAbortable", () => {
     expect(cacheEventsToDatabase).not.toHaveBeenCalled();
   });
 
-  it("merges valid relay listings and caches only valid product events", async () => {
+  it("merges valid relay listings and caches only cacheable product events", async () => {
     const cacheEventsToDatabase = jest.fn().mockResolvedValue(undefined);
 
     jest.doMock("@/utils/db/db-client", () => ({
@@ -175,6 +175,14 @@ describe("fetchAllPostsAbortable", () => {
       created_at: 20,
       sig: "sig-invalid",
     });
+    const zapsnagNote = makeBaseEvent({
+      id: "zapsnag-note",
+      pubkey: "zapsnag-seller",
+      created_at: 30,
+      kind: 1,
+      tags: [["t", "shopstr-zapsnag"]],
+      sig: "sig-zapsnag",
+    });
     const editProductContext = jest.fn();
 
     const promise = fetchAllPostsAbortable(
@@ -186,13 +194,17 @@ describe("fetchAllPostsAbortable", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     params!.onevent(relayProduct);
     params!.onevent(invalidProduct);
+    params!.onevent(zapsnagNote);
     params!.oneose();
 
     await expect(promise).resolves.toEqual({
-      productEvents: [relayProduct],
-      profileSetFromProducts: new Set(["seller"]),
+      productEvents: [relayProduct, zapsnagNote],
+      profileSetFromProducts: new Set(["seller", "zapsnag-seller"]),
     });
-    expect(editProductContext).toHaveBeenLastCalledWith([relayProduct], false);
+    expect(editProductContext).toHaveBeenLastCalledWith(
+      [relayProduct, zapsnagNote],
+      false
+    );
     expect(cacheEventsToDatabase).toHaveBeenCalledWith([relayProduct]);
     expect(sub.close).toHaveBeenCalledTimes(1);
   });
