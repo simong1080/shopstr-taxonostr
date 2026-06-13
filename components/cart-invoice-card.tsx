@@ -41,6 +41,7 @@ import {
 } from "@cashu/cashu-ts";
 import { safeMeltProofs } from "@/utils/cashu/melt-retry-service";
 import { safeSwap } from "@/utils/cashu/swap-retry-service";
+import { sumProofAmounts } from "@/utils/cashu/proof-amount";
 import { withMintRetry } from "@/utils/cashu/mint-retry-service";
 import {
   recordPendingMintQuote,
@@ -1651,10 +1652,7 @@ export default function CartInvoiceCard({
             const changeProofs = [...keep, ...meltOutcome.changeProofs];
             const changeAmount =
               Array.isArray(changeProofs) && changeProofs.length > 0
-                ? changeProofs.reduce(
-                    (acc, current: Proof) => acc + current.amount.toNumber(),
-                    0
-                  )
+                ? sumProofAmounts(changeProofs)
                 : 0;
             let productDetails = "";
             if (product.selectedSize) {
@@ -1784,10 +1782,7 @@ export default function CartInvoiceCard({
             ];
             const unusedAmount =
               Array.isArray(unusedProofs) && unusedProofs.length > 0
-                ? unusedProofs.reduce(
-                    (acc, current: Proof) => acc + current.amount.toNumber(),
-                    0
-                  )
+                ? sumProofAmounts(unusedProofs)
                 : 0;
             const unusedToken = getEncodedToken({
               mint: mints[0]!,

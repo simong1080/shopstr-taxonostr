@@ -13,33 +13,7 @@ import {
   Proof,
 } from "@cashu/cashu-ts";
 import ProtectedRoute from "@/components/utility-components/protected-route";
-
-function proofAmountToNumber(amount: unknown): number {
-  if (typeof amount === "number") return Number.isFinite(amount) ? amount : 0;
-  if (typeof amount === "string") {
-    const parsed = Number(amount);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  if (typeof amount === "bigint") return Number(amount);
-  if (
-    amount &&
-    typeof amount === "object" &&
-    "toNumber" in amount &&
-    typeof amount.toNumber === "function"
-  ) {
-    const legacyAmount = amount as { toNumber: () => unknown };
-    const parsed = legacyAmount.toNumber();
-    return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
-function sumProofAmounts(proofs: Proof[]): number {
-  return proofs.reduce(
-    (acc, proof) => acc + proofAmountToNumber(proof.amount),
-    0
-  );
-}
+import { sumProofAmounts } from "@/utils/cashu/proof-amount";
 
 const Wallet = () => {
   const [totalBalance, setTotalBalance] = useState(0);

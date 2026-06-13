@@ -32,6 +32,7 @@ import {
   SignerContext,
 } from "@/components/utility-components/nostr-context-provider";
 import { NostrNIP46Signer } from "@/utils/nostr/signers/nostr-nip46-signer";
+import { sumProofAmounts } from "@/utils/cashu/proof-amount";
 
 const ReceiveButton = () => {
   const [showReceiveModal, setShowReceiveModal] = useState(false);
@@ -98,10 +99,7 @@ const ReceiveButton = () => {
         }
         setIsClaimed(true);
         handleToggleReceiveModal();
-        const transactionAmount = tokenProofs.reduce(
-          (acc, token: Proof) => acc + token.amount.toNumber(),
-          0
-        );
+        const transactionAmount = sumProofAmounts(tokenProofs);
         localStorage.setItem(
           "history",
           JSON.stringify([
