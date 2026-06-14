@@ -103,6 +103,17 @@ const SettingsPage = () => {
               >
                 API Keys
               </ListboxItem>
+              <ListboxItem
+                key="taxonomy"
+                description="Inspect the Taxonostr registry and loaded node graph"
+                classNames={listBoxClassnames}
+                startContent={<Cog6ToothIcon className={startIconClassnames} />}
+                onClick={() => {
+                  router.push("/taxonomy");
+                }}
+              >
+                Developer / Taxonomy
+              </ListboxItem>
             </ListboxSection>
             <ListboxSection
               title="Log out"
