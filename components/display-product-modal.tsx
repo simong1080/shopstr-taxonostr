@@ -29,6 +29,7 @@ import parseTags, {
 import { ProductContext } from "@/utils/context/context";
 import { getListingSlug } from "@/utils/url-slugs";
 import { NostrEvent } from "@/utils/types/types";
+import TaxonomySummary from "./utility-components/taxonomy-summary";
 
 interface ProductModalProps {
   productData: ProductData;
@@ -187,6 +188,12 @@ export default function DisplayProductModal({
               </div>
             </div>
             <Divider />
+            {productData.taxonomy && (
+              <>
+                <TaxonomySummary productData={productData} />
+                <Divider />
+              </>
+            )}
             <span className="text-xl font-semibold">Summary: </span>
             <span className="break-words whitespace-pre-wrap">
               {productData.summary}

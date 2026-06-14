@@ -109,6 +109,49 @@ describe("parseTags", () => {
     );
   });
 
+  it("should parse taxonomy tags into ProductData.taxonomy", () => {
+    const event = {
+      ...baseEvent,
+      tags: [
+        ["taxonomy", "thing", "thing:artifact:trading_card"],
+        ["taxonomy", "overlay", "val:context:segment:memorabilia"],
+        ["taxonomy", "overlay", "val:business_function:sell"],
+        ["taxonomy", "required", "val:sport:baseball"],
+        [
+          "taxonomy",
+          "ref",
+          "prop:condition",
+          "val:condition:trading_card:mint",
+        ],
+        ["taxonomy", "literal", "prop:year", "valtype:year", "2024"],
+      ],
+    };
+
+    const result = parseTags(event)!;
+
+    expect(result.taxonomy).toEqual({
+      primaryThingRef: "thing:artifact:trading_card",
+      overlayValRefs: [
+        "val:context:segment:memorabilia",
+        "val:business_function:sell",
+      ],
+      requiredRefs: ["val:sport:baseball"],
+      refAssertions: [
+        {
+          propRef: "prop:condition",
+          valueRef: "val:condition:trading_card:mint",
+        },
+      ],
+      literalAssertions: [
+        {
+          propRef: "prop:year",
+          valueTypeRef: "valtype:year",
+          value: 2024,
+        },
+      ],
+    });
+  });
+
   it("should fallback to summary tag when content is empty", () => {
     const event = {
       ...baseEvent,

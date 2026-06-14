@@ -1,5 +1,3 @@
-/* eslint-disable @next/next/no-img-element */
-
 import { useContext, useEffect, useRef, useState } from "react";
 import { Event, nip19 } from "nostr-tools";
 import parseTags, {
@@ -48,6 +46,7 @@ import { RawEventModal, EventIdModal } from "./modals/event-modals";
 import useReportEventFlow from "./use-report-event-flow";
 import { getLocalStorageJson } from "@/utils/safe-json";
 import { CartDiscountsMap, isCartDiscountsMap } from "@/utils/cart-discounts";
+import TaxonomySummary from "./taxonomy-summary";
 
 const SUMMARY_CHARACTER_LIMIT = 100;
 
@@ -527,6 +526,13 @@ export default function CheckoutCard({
         {!isBeingPaid ? (
           <>
             <div className="max-w-screen pt-4">
+              {productData.taxonomy && (
+                <TaxonomySummary
+                  productData={productData}
+                  breadcrumbOnly
+                  className="mx-3 mb-4 max-w-4xl"
+                />
+              )}
               <div
                 className="mx-3 my-3 flex max-w-screen flex-row break-words whitespace-normal"
                 key={uniqueKey}
@@ -705,6 +711,14 @@ export default function CheckoutCard({
                         {productData.restrictions}
                       </span>
                     </div>
+                  )}
+                  {productData.taxonomy && (
+                    <TaxonomySummary
+                      productData={productData}
+                      maxOverlayChips={4}
+                      hideBreadcrumb
+                      className="mt-3"
+                    />
                   )}
                   <div className="hidden sm:block">
                     <p className="text-light-text dark:text-dark-text mt-4 w-full text-left text-lg break-words whitespace-pre-wrap">
