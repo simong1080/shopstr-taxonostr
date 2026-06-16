@@ -3,6 +3,16 @@ import type { NextRequest } from "next/server";
 import { nip19 } from "nostr-tools";
 
 const SHOPSTR_DOMAINS = ["shopstr.market", "shopstr.store"];
+const PLATFORM_DOMAIN_SUFFIXES = [
+  ".repl.co",
+  ".replit.dev",
+  ".replit.app",
+  ".vercel.app",
+];
+
+function normalizeHostname(hostname: string): string {
+  return hostname.toLowerCase().split(":")[0] || "";
+}
 
 function getShopstrBaseDomain(hostname: string): string | null {
   for (const domain of SHOPSTR_DOMAINS) {
@@ -11,9 +21,21 @@ function getShopstrBaseDomain(hostname: string): string | null {
   return null;
 }
 
+function isPlatformDomain(hostname: string): boolean {
+  const normalizedHostname = normalizeHostname(hostname);
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname === "127.0.0.1" ||
+    normalizedHostname.includes("replit") ||
+    PLATFORM_DOMAIN_SUFFIXES.some((suffix) =>
+      normalizedHostname.endsWith(suffix)
+    )
+  );
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const hostname = request.headers.get("host") || "";
+  const hostname = normalizeHostname(request.headers.get("host") || "");
 
   if (pathname === "/.well-known/agent.json") {
     return NextResponse.rewrite(
@@ -43,16 +65,7 @@ export function proxy(request: NextRequest) {
     }
   }
 
-  if (
-    hostname &&
-    !baseDomain &&
-    !hostname.includes("localhost") &&
-    !hostname.includes("replit") &&
-    !hostname.includes("127.0.0.1") &&
-    !hostname.includes(".repl.co") &&
-    !hostname.includes(".replit.dev") &&
-    !hostname.includes(".replit.app")
-  ) {
+  if (hostname && !baseDomain && !isPlatformDomain(hostname)) {
     if (pathname.startsWith("/_next/")) {
       return NextResponse.next();
     }
