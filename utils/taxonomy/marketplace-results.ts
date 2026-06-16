@@ -26,6 +26,7 @@ export type MarketplaceFacetFilter = {
   values: Array<[string, string]>;
   valueKind: "ref" | "literal" | "mixed";
   booleanTrueOnly: boolean;
+  explicit: boolean;
 };
 
 export type MarketplacePromotedFacetSection = {
@@ -210,6 +211,32 @@ function mergeSelectedValuesByProp(
     ]);
   }
   return selectedValuesByProp;
+}
+
+function hasSelectedValuesForProp(
+  selectedValuesByProp: Record<string, string[]>,
+  propRef: string
+): boolean {
+  return (
+    (selectedValuesByProp[normalizeTaxonomyRef(propRef)] || []).filter(Boolean)
+      .length > 0
+  );
+}
+
+function shouldShowFilterControl(params: {
+  propRef: string;
+  explicitSelectedValuesByProp: Record<string, string[]>;
+  activeSelectedValuesByProp: Record<string, string[]>;
+}): boolean {
+  const { propRef, explicitSelectedValuesByProp, activeSelectedValuesByProp } =
+    params;
+  const normalizedPropRef = normalizeTaxonomyRef(propRef);
+  if (hasSelectedValuesForProp(explicitSelectedValuesByProp, normalizedPropRef))
+    return true;
+  return !hasSelectedValuesForProp(
+    activeSelectedValuesByProp,
+    normalizedPropRef
+  );
 }
 
 function taxonomyValueRefsForProduct(productData: ProductData): string[] {
@@ -508,6 +535,9 @@ export function buildMarketplaceResultsViewModel(params: {
   const activeSelectedValuesByProp = mergeSelectedValuesByProp(
     selectedFacetAssertionsFor()
   );
+  const explicitSelectedValuesByProp = mergeSelectedValuesByProp(
+    explicitFacetAssertions
+  );
 
   const scopeFilteredListingProducts = scopedListingProducts.filter((product) =>
     productSatisfiesSelectedScopeValues(
@@ -640,7 +670,13 @@ export function buildMarketplaceResultsViewModel(params: {
   const actualFacetFilters =
     registry && shouldShowListings && scopedListingProducts.length > 0
       ? (() => {
-          const propRefs = observedPropRefs;
+          const propRefs = observedPropRefs.filter((propRef) =>
+            shouldShowFilterControl({
+              propRef,
+              explicitSelectedValuesByProp,
+              activeSelectedValuesByProp,
+            })
+          );
 
           const filters = propRefs.map((propRef) => {
             const sourceProducts = scopedProductsForFilterOptions(propRef);
@@ -715,10 +751,16 @@ export function buildMarketplaceResultsViewModel(params: {
               values,
               valueKind,
               booleanTrueOnly,
+              explicit: hasSelectedValuesForProp(
+                explicitSelectedValuesByProp,
+                propRef
+              ),
             };
           });
 
-          return filters.filter((filter) => filter.values.length > 0);
+          return filters.filter(
+            (filter) => filter.explicit || filter.values.length > 0
+          );
         })()
       : [];
 

@@ -89,6 +89,26 @@ function teamProduct(id: string): ProductData {
   return listedProduct;
 }
 
+function teamOnlyProduct(
+  id: string,
+  teamRef: string,
+  conditionRef = "val:condition:used"
+): ProductData {
+  const listedProduct = product(
+    id,
+    "thing:organization:league:mlb",
+    conditionRef
+  );
+  listedProduct.taxonomy!.refAssertions = [
+    {
+      propRef: "prop:team",
+      valueRef: teamRef,
+    },
+    { propRef: "prop:condition", valueRef: conditionRef },
+  ];
+  return listedProduct;
+}
+
 function impliedSportProduct(id: string): ProductData {
   return {
     id,
@@ -198,6 +218,11 @@ function registry() {
         parents: ["val:sport"],
         relations: ["thing:organization:league:nba"],
       }),
+      event("val:sport:football", {
+        labels: { en: "Football" },
+        parents: ["val:sport"],
+        relations: ["thing:organization:league:bundesliga"],
+      }),
       event("val:sport:ice_hockey", {
         labels: { en: "Ice hockey" },
         parents: ["val:sport"],
@@ -218,11 +243,17 @@ function registry() {
       event("thing:organization:league:nba", {
         labels: { en: "NBA" },
         parents: ["thing:organization:league"],
+        relations: ["val:sport:basketball"],
       }),
       event("thing:organization:league:nhl", {
         labels: { en: "NHL" },
         parents: ["thing:organization:league"],
         relations: ["val:sport:ice_hockey"],
+      }),
+      event("thing:organization:league:bundesliga", {
+        labels: { en: "Bundesliga" },
+        parents: ["thing:organization:league"],
+        relations: ["val:sport:football"],
       }),
       event("thing:organization:sports_team", {
         labels: { en: "Sports team" },
@@ -232,6 +263,21 @@ function registry() {
         labels: { en: "Seattle Kraken" },
         parents: ["thing:organization:sports_team"],
         relations: ["thing:organization:league:nhl"],
+      }),
+      event("thing:organization:sports_team:carolina_hurricanes", {
+        labels: { en: "Carolina Hurricanes" },
+        parents: ["thing:organization:sports_team"],
+        relations: ["thing:organization:league:nhl"],
+      }),
+      event("thing:organization:sports_team:philadelphia_76ers", {
+        labels: { en: "Philadelphia 76ers" },
+        parents: ["thing:organization:sports_team"],
+        relations: ["thing:organization:league:nba"],
+      }),
+      event("thing:organization:sports_team:bayern_munich", {
+        labels: { en: "Bayern Munich" },
+        parents: ["thing:organization:sports_team"],
+        relations: ["thing:organization:league:bundesliga"],
       }),
     ],
     { trustedPubkeys: [PUBKEY] }
@@ -663,8 +709,214 @@ describe("marketplace results view model", () => {
     expect(
       viewModel.actualFacetFilters.find(
         (filter) => filter.propRef === "prop:sport"
+      )
+    ).toBeUndefined();
+  });
+
+  it("keeps an explicit league filter editable and renders implied sport as chip-only", () => {
+    const testRegistry = registry();
+    const scopeState = buildActiveMarketplaceState(
+      {
+        context: "val:context:segment:collectible_cards",
+        listings: "1",
+        pv: "prop:league|thing:organization:league:bundesliga",
+      },
+      testRegistry
+    );
+
+    const viewModel = buildMarketplaceResultsViewModel({
+      products: [
+        teamOnlyProduct(
+          "bayern-card",
+          "thing:organization:sports_team:bayern_munich"
+        ),
+        teamOnlyProduct(
+          "sixers-card",
+          "thing:organization:sports_team:philadelphia_76ers"
+        ),
+      ],
+      registry: testRegistry,
+      scopeState,
+      selectedCategories: new Set(),
+      selectedLocation: "",
+      selectedSearch: "",
+      selectedAspectFilters: {},
+      locale: "en",
+    });
+
+    expect(
+      viewModel.filteredProducts.map((listedProduct) => listedProduct.id)
+    ).toEqual(["bayern-card"]);
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:league"
+      )
+    ).toMatchObject({ explicit: true });
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:sport"
+      )
+    ).toBeUndefined();
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:team"
       )?.values
-    ).toEqual([["val:sport:ice_hockey", "Ice hockey"]]);
+    ).toEqual([
+      ["thing:organization:sports_team:bayern_munich", "Bayern Munich"],
+    ]);
+    expect(viewModel.selectedFacetChips).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          propRef: "prop:sport",
+          valueRef: "val:sport:football",
+          source: "derived",
+          removable: false,
+        }),
+      ])
+    );
+  });
+
+  it("keeps multi-value explicit league filters editable and narrows teams to selected leagues", () => {
+    const testRegistry = registry();
+    const scopeState = buildActiveMarketplaceState(
+      {
+        context: "val:context:segment:collectible_cards",
+        listings: "1",
+        pv: [
+          "prop:league|thing:organization:league:nba",
+          "prop:league|thing:organization:league:nhl",
+        ],
+      },
+      testRegistry
+    );
+
+    const viewModel = buildMarketplaceResultsViewModel({
+      products: [
+        teamOnlyProduct(
+          "hurricanes-card",
+          "thing:organization:sports_team:carolina_hurricanes"
+        ),
+        teamOnlyProduct(
+          "sixers-card",
+          "thing:organization:sports_team:philadelphia_76ers"
+        ),
+        teamOnlyProduct(
+          "bayern-card",
+          "thing:organization:sports_team:bayern_munich"
+        ),
+      ],
+      registry: testRegistry,
+      scopeState,
+      selectedCategories: new Set(),
+      selectedLocation: "",
+      selectedSearch: "",
+      selectedAspectFilters: {},
+      locale: "en",
+    });
+
+    expect(
+      viewModel.filteredProducts.map((listedProduct) => listedProduct.id)
+    ).toEqual(["hurricanes-card", "sixers-card"]);
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:league"
+      )
+    ).toMatchObject({ explicit: true });
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:sport"
+      )
+    ).toBeUndefined();
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:team"
+      )?.values
+    ).toEqual([
+      [
+        "thing:organization:sports_team:carolina_hurricanes",
+        "Carolina Hurricanes",
+      ],
+      [
+        "thing:organization:sports_team:philadelphia_76ers",
+        "Philadelphia 76ers",
+      ],
+    ]);
+    expect(
+      viewModel.selectedFacetChips
+        .filter((chip) => chip.propRef === "prop:sport")
+        .map((chip) => chip.valueRef)
+    ).toEqual(["val:sport:basketball", "val:sport:ice_hockey"]);
+  });
+
+  it("keeps explicit team filters editable and hides implied league and sport controls", () => {
+    const testRegistry = registry();
+    const scopeState = buildActiveMarketplaceState(
+      {
+        context: "val:context:segment:collectible_cards",
+        listings: "1",
+        pv: [
+          "prop:team|thing:organization:sports_team:carolina_hurricanes",
+          "prop:team|thing:organization:sports_team:philadelphia_76ers",
+        ],
+      },
+      testRegistry
+    );
+
+    const viewModel = buildMarketplaceResultsViewModel({
+      products: [
+        teamOnlyProduct(
+          "hurricanes-card",
+          "thing:organization:sports_team:carolina_hurricanes"
+        ),
+        teamOnlyProduct(
+          "sixers-card",
+          "thing:organization:sports_team:philadelphia_76ers"
+        ),
+        teamOnlyProduct(
+          "bayern-card",
+          "thing:organization:sports_team:bayern_munich"
+        ),
+      ],
+      registry: testRegistry,
+      scopeState,
+      selectedCategories: new Set(),
+      selectedLocation: "",
+      selectedSearch: "",
+      selectedAspectFilters: {},
+      locale: "en",
+    });
+
+    expect(
+      viewModel.filteredProducts.map((listedProduct) => listedProduct.id)
+    ).toEqual(["hurricanes-card", "sixers-card"]);
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:team"
+      )
+    ).toMatchObject({ explicit: true });
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:league"
+      )
+    ).toBeUndefined();
+    expect(
+      viewModel.actualFacetFilters.find(
+        (filter) => filter.propRef === "prop:sport"
+      )
+    ).toBeUndefined();
+    expect(
+      viewModel.selectedFacetChips
+        .filter((chip) => chip.propRef === "prop:league")
+        .map((chip) => chip.valueRef)
+    ).toEqual([
+      "thing:organization:league:nhl",
+      "thing:organization:league:nba",
+    ]);
+    expect(
+      viewModel.selectedFacetChips
+        .filter((chip) => chip.propRef === "prop:sport")
+        .map((chip) => chip.valueRef)
+    ).toEqual(["val:sport:ice_hockey", "val:sport:basketball"]);
   });
 
   it("renders selected pv values as chips and filters products", () => {

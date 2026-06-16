@@ -371,19 +371,38 @@ function selectedValuesByPropFromQuery(
   legacyValueRefs: string[] = []
 ): Record<string, string[]> {
   const state = marketplaceTaxonomyState(registry, thingRef, contextRef);
-  return resolveSelectedValuesFromRefs({
+  const explicitSelectedValuesByProp = selectedPropValuePairsByProp(
+    registry,
+    selectedPropValuePairs
+  );
+  const legacySelectedValuesByProp = resolveSelectedValuesFromRefs({
     registry,
     state,
-    selectedPropValuePairs,
+    selectedPropValuePairs: [],
     legacyValueRefs,
     getLegacyCandidatePropRefs: (selectedValuesByProp) =>
-      getUnresolvedRequiredPropRefs(
-        registry,
-        thingRef,
-        contextRef,
-        selectedValuesByProp
-      ),
+      getUnresolvedRequiredPropRefs(registry, thingRef, contextRef, {
+        ...explicitSelectedValuesByProp,
+        ...selectedValuesByProp,
+      }),
   });
+  return {
+    ...explicitSelectedValuesByProp,
+    ...legacySelectedValuesByProp,
+  };
+}
+
+function valueMatchesPropRoot(
+  registry: TaxonomyRegistry,
+  propRef: string,
+  valueRef: string
+): boolean {
+  const normalizedValueRef = normalizeRef(valueRef);
+  return (registry.propRootsByRef[propRef] || []).some(
+    (rootRef) =>
+      normalizeRef(rootRef) === normalizedValueRef ||
+      isSameOrDescendant(registry, normalizedValueRef, rootRef)
+  );
 }
 
 function selectedPropValuePairsByProp(
@@ -395,7 +414,9 @@ function selectedPropValuePairsByProp(
     const propRef = normalizeRef(pair.propRef);
     const valueRef = normalizeRef(pair.valueRef);
     if (!propRef || !valueRef) continue;
-    if (!registry.nodeByRef[propRef] || !registry.nodeByRef[valueRef]) continue;
+    if (registry.nodeByRef[propRef]?.family !== "prop") continue;
+    if (!registry.nodeByRef[valueRef]) continue;
+    if (!valueMatchesPropRoot(registry, propRef, valueRef)) continue;
     selectedValuesByProp[propRef] = uniqueRefs([
       ...(selectedValuesByProp[propRef] || []),
       valueRef,
@@ -1359,9 +1380,7 @@ export function buildMarketplaceNavigationHref(params: {
   selectedValuesByProp?: Record<string, string[]>;
   listingsIntent?: boolean;
 }): string {
-  const selectedValuesByProp =
-    params.selectedValuesByProp ??
-    params.currentScopeState.selectedValuesByProp;
+  const selectedValuesByProp = params.selectedValuesByProp ?? {};
   if (!params.registry) {
     const fallbackHref = buildMarketplaceHref({
       contextRef: params.targetContextRef,

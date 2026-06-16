@@ -84,7 +84,8 @@ export default function MarketplaceFilterBar({
 
   const renderFilterControl = (filter: MarketplaceFacetFilter) => {
     const values = availableFilterValues(filter);
-    if (values.length === 0) return null;
+    const hasAvailableValues = values.length > 0;
+    if (!hasAvailableValues && !filter.explicit) return null;
     if (filter.booleanTrueOnly) {
       return (
         <button
@@ -114,16 +115,17 @@ export default function MarketplaceFilterBar({
         </span>
         <button
           type="button"
-          className="border-default-300 text-default-700 hover:border-shopstr-purple hover:text-shopstr-purple focus:ring-shopstr-purple/40 dark:border-default-700 dark:text-default-200 flex w-full items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-left text-sm font-medium transition focus:ring-2 focus:outline-none dark:bg-neutral-950"
+          className="border-default-300 text-default-700 hover:border-shopstr-purple hover:text-shopstr-purple focus:ring-shopstr-purple/40 disabled:text-default-400 disabled:hover:border-default-300 disabled:hover:text-default-400 dark:border-default-700 dark:text-default-200 dark:disabled:text-default-500 disabled:bg-default-50 flex w-full items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-left text-sm font-medium transition focus:ring-2 focus:outline-none disabled:cursor-not-allowed dark:bg-neutral-950 dark:disabled:bg-neutral-900"
           aria-expanded={isOpen}
+          disabled={!hasAvailableValues}
           onClick={() => onOpenFilterChange(isOpen ? "" : filter.propRef)}
         >
-          <span>Choose</span>
+          <span>{hasAvailableValues ? "Choose" : "No more values"}</span>
           <ChevronDownIcon
             className={`h-4 w-4 shrink-0 transition ${isOpen ? "rotate-180" : ""}`}
           />
         </button>
-        {isOpen && (
+        {isOpen && hasAvailableValues && (
           <div className="border-default-200 dark:border-default-700 absolute left-0 z-40 mt-2 max-h-72 w-72 overflow-y-auto rounded-xl border bg-white p-2 shadow-lg dark:bg-neutral-900">
             {values.map(([value, label]) => (
               <button
@@ -181,6 +183,11 @@ export default function MarketplaceFilterBar({
                   {chip.label}:
                 </span>
                 <span>{chip.valueLabel}</span>
+                {chip.source === "derived" && (
+                  <span className="text-default-500 dark:text-default-400">
+                    implied
+                  </span>
+                )}
               </>
             }
             variant={chip.source === "explicit" ? "filter" : "selected"}

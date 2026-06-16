@@ -188,6 +188,15 @@ describe("marketplace taxonomy scope helpers", () => {
         parents: ["thing:artifact:bat"],
         relations: ["val:context:segment:sporting_goods"],
       }),
+      event("thing:artifact:jewelry", {
+        labels: { en: "Jewelry" },
+        parents: ["thing:artifact"],
+      }),
+      event("thing:artifact:jewelry:ring", {
+        labels: { en: "Ring" },
+        parents: ["thing:artifact:jewelry"],
+        relations: ["val:context:segment:memorabilia"],
+      }),
       event("thing:artifact:puck", {
         labels: { en: "Puck" },
         parents: ["thing:artifact"],
@@ -383,6 +392,10 @@ describe("marketplace taxonomy scope helpers", () => {
         labels: { en: "Gridiron football" },
         parents: ["val:sport"],
       }),
+      event("val:sport:wrestling", {
+        labels: { en: "Wrestling" },
+        parents: ["val:sport"],
+      }),
       event("val:display_style", { labels: { en: "Display styles" } }),
     ],
     { trustedPubkeys: [PUBKEY] }
@@ -413,7 +426,7 @@ describe("marketplace taxonomy scope helpers", () => {
     expect(scope.showListings).toBe(true);
   });
 
-  it("serializes navigation targets from rebuilt marketplace scope state", () => {
+  it("clears selected prop filters when serializing structural navigation targets", () => {
     const currentScope = buildMarketplaceScopeFromQuery(
       {
         context: "val:context:segment:collectible_cards",
@@ -433,8 +446,52 @@ describe("marketplace taxonomy scope helpers", () => {
         listingsIntent: true,
       })
     ).toBe(
-      "/marketplace?context=val%3Acontext%3Asegment%3Aarts_and_entertainment&pv=prop%3Asport%7Cval%3Asport%3Abaseball&listings=1"
+      "/marketplace?context=val%3Acontext%3Asegment%3Aarts_and_entertainment&listings=1"
     );
+  });
+
+  it("preserves selected prop filters when explicit filter state is provided", () => {
+    const currentScope = buildMarketplaceScopeFromQuery(
+      {
+        context: "val:context:segment:memorabilia",
+        thing: "thing:artifact:jewelry:ring",
+        listings: "1",
+      },
+      registry
+    );
+
+    expect(
+      buildMarketplaceNavigationHref({
+        registry,
+        currentScopeState: currentScope,
+        targetContextRef: "val:context:segment:memorabilia",
+        targetThingRef: "thing:artifact:jewelry:ring",
+        selectedValuesByProp: {
+          "prop:sport": ["val:sport:wrestling"],
+        },
+        listingsIntent: true,
+      })
+    ).toBe(
+      "/marketplace?thing=thing%3Aartifact%3Ajewelry%3Aring&context=val%3Acontext%3Asegment%3Amemorabilia&pv=prop%3Asport%7Cval%3Asport%3Awrestling&listings=1"
+    );
+  });
+
+  it("keeps explicit observed facet pv active even when the thing schema does not declare the prop", () => {
+    const scope = buildMarketplaceScopeFromQuery(
+      {
+        thing: "thing:artifact:jewelry:ring",
+        context: "val:context:segment:memorabilia",
+        listings: "1",
+        pv: "prop:sport|val:sport:wrestling",
+      },
+      registry
+    );
+
+    expect(scope.selectedValuesByProp).toEqual({
+      "prop:sport": ["val:sport:wrestling"],
+    });
+    expect(scope.pageMode).toBe("listings");
+    expect(scope.showListings).toBe(true);
   });
 
   it("canonicalizes legacy taxon thing and context aliases", () => {

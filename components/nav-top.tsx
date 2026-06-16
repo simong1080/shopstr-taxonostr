@@ -3,13 +3,23 @@ import useNavigation from "@/components/hooks/use-navigation";
 import { Button, Image, useDisclosure } from "@heroui/react";
 import { Bars4Icon } from "@heroicons/react/24/outline";
 import { countNumberOfUnreadMessagesFromChatsContext } from "@/utils/messages/utils";
-import { ChatsContext, ShopMapContext } from "@/utils/context/context";
+import {
+  ChatsContext,
+  ShopMapContext,
+  SiteLanguageContext,
+} from "@/utils/context/context";
 import { SignerContext } from "@/components/utility-components/nostr-context-provider";
 import { useRouter } from "next/router";
 import SignInModal from "./sign-in/SignInModal";
 import { ProfileWithDropdown } from "./utility-components/profile/profile-dropdown";
 import { ShopProfile } from "../utils/types/types";
 import { getLocalStorageJson } from "@/utils/safe-json";
+import {
+  RTL_SITE_LANGUAGES,
+  SITE_LANGUAGE_OPTIONS,
+  SiteLanguageCode,
+} from "@/utils/i18n-config";
+import { translateUi } from "@/utils/i18n-translations";
 
 const TopNav = ({
   setFocusedPubkey,
@@ -31,6 +41,7 @@ const TopNav = ({
 
   const chatsContext = useContext(ChatsContext);
   const shopMapContext = useContext(ShopMapContext);
+  const { siteLanguage, setSiteLanguage } = useContext(SiteLanguageContext);
 
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
   const [cartQuantity, setCartQuantity] = useState(0);
@@ -42,6 +53,7 @@ const TopNav = ({
   const [shopName, setShopName] = useState("");
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const t = (key: string) => translateUi(siteLanguage, key);
 
   useEffect(() => {
     const fetchAndUpdateCartQuantity = async () => {
@@ -124,6 +136,29 @@ const TopNav = ({
     setIsMobileMenuOpen(false);
   };
 
+  const languageSelector = (className: string = "") => (
+    <label
+      className={`text-light-text dark:text-dark-text flex min-w-0 items-center gap-2 text-sm ${className}`.trim()}
+    >
+      <span className="hidden lg:inline">{t("Language")}</span>
+      <select
+        aria-label={t("Language")}
+        value={siteLanguage}
+        dir={RTL_SITE_LANGUAGES.has(siteLanguage) ? "rtl" : "ltr"}
+        onChange={(event) =>
+          setSiteLanguage(event.target.value as SiteLanguageCode)
+        }
+        className="w-full max-w-40 min-w-0 rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm outline-none dark:border-zinc-700"
+      >
+        {SITE_LANGUAGE_OPTIONS.map((option) => (
+          <option key={option.code} value={option.code}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
   const MobileMenu = () => (
     <div className="bg-light-fg dark:bg-dark-fg absolute top-full left-0 w-full shadow-lg">
       <Button
@@ -205,9 +240,11 @@ const TopNav = ({
             </span>
           </Button>
         </div>
-        <div className="ml-auto flex flex-row items-center md:hidden">
+        <div className="ml-auto flex min-w-0 flex-row items-center gap-1 md:hidden">
+          {languageSelector("max-w-[8.5rem] shrink")}
           <Button
-            className="bg-transparent"
+            isIconOnly
+            className="min-w-10 shrink-0 bg-transparent"
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
           >
             <Bars4Icon className="text-light-text dark:text-dark-text h-6 w-6" />
@@ -305,7 +342,8 @@ const TopNav = ({
             )}
           </Button>
         </div>
-        <div className="hidden flex-shrink-0 items-center md:flex">
+        <div className="hidden flex-shrink-0 items-center gap-3 md:flex">
+          {languageSelector()}
           {signedIn ? (
             <ProfileWithDropdown
               pubkey={userPubkey!}
